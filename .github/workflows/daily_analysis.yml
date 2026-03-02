@@ -94,7 +94,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_MESSAGE_THREAD_ID: ${{ secrets.TELEGRAM_MESSAGE_THREAD_ID }}
-          TELEGRAM_SEND_AS_DOCUMENT: true # 显式设置为 true
+          TELEGRAM_SEND_AS_DOCUMENT: true
           
           # 方式四：邮件
           EMAIL_SENDER: ${{ vars.EMAIL_SENDER || secrets.EMAIL_SENDER }}
@@ -146,7 +146,7 @@ jobs:
           # ==========================================
           # 系统配置
           # ==========================================
-          LOG_LEVEL: DEBUG # 修改为 DEBUG
+          LOG_LEVEL: DEBUG
           MAX_WORKERS: ${{ vars.MAX_WORKERS || secrets.MAX_WORKERS || '1' }}
           # GitHub Actions 环境建议关闭不稳定的数据源
           ENABLE_CHIP_DISTRIBUTION: 'false'
