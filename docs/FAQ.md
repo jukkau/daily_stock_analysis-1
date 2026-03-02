@@ -55,7 +55,7 @@
 
 ### Q4: 数据获取被限流或返回为空？
 
-**现象**：日志显示 `熔断器触发` 或数据返回 `None`
+**现象**：日志显示 `熔断器触发` 或数据返回 `None`，或出现 `RemoteDisconnected`、`push2his.eastmoney.com` 连接被关闭等
 
 **原因**：免费数据源（东方财富、新浪等）有反爬机制，短时间大量请求会被限流。
 
@@ -63,6 +63,8 @@
 1. 系统已内置多数据源自动切换和熔断保护
 2. 减少自选股数量，或增加请求间隔
 3. 避免频繁手动触发分析
+4. 若东财接口频繁失败，可设置 `ENABLE_EASTMONEY_PATCH=true` 启用东财补丁（注入 NID 令牌与随机 User-Agent，降低被限流概率）
+5. 将 `MAX_WORKERS=1` 改为串行获取，减少对东财的并发压力
 
 ---
 
@@ -185,6 +187,7 @@ PROXY_PORT=10809
 OPENAI_API_KEY=sk-xxxxxxxx
 OPENAI_BASE_URL=https://api.deepseek.com/v1
 OPENAI_MODEL=deepseek-chat
+# 思考模式：deepseek-reasoner、deepseek-r1、qwq 等自动识别；deepseek-chat 系统按模型名自动启用
 ```
 
 支持的模型服务：
@@ -222,6 +225,29 @@ OPENAI_MODEL=deepseek-chat
 
 ---
 
+### Q14.1: Docker 中网络/DNS 解析失败（如 api.tushare.pro、searchapi.eastmoney.com 无法解析）？
+
+**现象**：日志显示 `Temporary failure in name resolution` 或 `NameResolutionError`，股票数据 API 和大模型 API 均无法访问。
+
+**原因**：自定义 bridge 网络下，容器使用 Docker 内置 DNS，在旁路由、特定网络环境时可能解析失败。
+
+**解决方案**（按优先级尝试）：
+
+1. **显式配置 DNS**：在 `docker/docker-compose.yml` 的 `x-common` 下添加：
+   ```yaml
+   dns:
+     - 223.5.5.5
+     - 119.29.29.29
+     - 8.8.8.8
+   ```
+   然后执行 `docker-compose down` 和 `docker-compose up -d --force-recreate` 重新创建容器。
+
+2. **改用 host 网络模式**：若上述仍无效，可在 `server` 服务下添加 `network_mode: host`，并移除 `ports` 映射。使用 host 模式时，`ports` 无效，**端口由 `command` 中的 `--port` 指定**。若宿主机默认端口已占用，可修改为其他端口（如 `.env` 中设置 `API_PORT=8080`），访问对应 `http://localhost:8080`。
+
+> 📌 相关 Issue: [#372](https://github.com/ZhuLinsen/daily_stock_analysis/issues/372)
+
+---
+
 ## 🔧 其他问题
 
 ### Q15: 如何只运行大盘复盘，不分析个股？
@@ -245,6 +271,25 @@ python main.py --market-only
 
 ---
 
+### Q17: 为什么周末在 GitHub Actions 手动触发仍显示“非交易日跳过”？
+
+**现象**：已经配置了 `TRADING_DAY_CHECK_ENABLED` 或希望手动运行，但日志仍提示“今日所有相关市场均为非交易日，跳过执行”。
+
+**解决方案**：
+1. 打开 `Actions → 每日股票分析 → Run workflow`
+2. 手动触发时将 `force_run` 设为 `true`（单次强制运行）
+3. 如果希望长期关闭交易日检查，在 `Settings → Secrets and variables → Actions` 中设置：
+   ```bash
+   TRADING_DAY_CHECK_ENABLED=false
+   ```
+
+**规则说明**：
+- `TRADING_DAY_CHECK_ENABLED=true` 且 `force_run=false`：非交易日跳过（默认）
+- `force_run=true`：本次即使非交易日也执行
+- `TRADING_DAY_CHECK_ENABLED=false`：定时和手动都不做交易日检查
+
+---
+
 ## 💬 还有问题？
 
 如果以上内容没有解决你的问题，欢迎：
@@ -254,4 +299,4 @@ python main.py --market-only
 
 ---
 
-*最后更新：2026-02-01*
+*最后更新：2026-02-28*

@@ -1,17 +1,159 @@
 # Changelog
 
-所有重要更改都会记录在此文件中。
+All notable changes to this project will be documented in this file.
 
-格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
-版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/).
+
+> For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
 
-### 变更（Breaking）
-- **Web 登录认证重构**：移除 `ADMIN_PASSWORD`、`ADMIN_PASSWORD_HASH`，改用 `ADMIN_AUTH_ENABLED` 开关 + 文件凭证。启用后首次访问在网页设置初始密码，支持「系统设置 > 修改密码」和 CLI `python -m src.auth reset_password` 重置。
+### Fixed
+- 🐛 **AstrBot sender docstring misplaced** — `import time` placed before docstring in `_send_astrbot`, causing it to become dead code
+- 🐛 **Telegram Markdown link escaping** — `_convert_to_telegram_markdown` escaped `[]()` characters, breaking all Markdown links in reports
+- 🐛 **Duplicate `discord_bot_status` field** in Config dataclass — second declaration silently shadowed the first
+- 🧹 **Unused imports** — removed `shutil`/`subprocess` from `main.py`
+
+### Changed
+- ⚙️ **Auto-tag workflow defaults to NO tag** — only tags when commit message explicitly contains `#patch`, `#minor`, or `#major`
+
+### Docs
+- 📝 Clarified GitHub Actions non-trading-day manual run controls (`TRADING_DAY_CHECK_ENABLED` + `force_run`) for Issue #461 / PR #466
+
+## [3.4.7] - 2026-02-28
+
+### Added
+- 🧠 **CN/US Market Strategy Blueprint System** (#395) — market review prompt injects region-specific strategy blueprints with position sizing and risk trigger recommendations
+
+### Fixed
+- 🐛 **`TRADING_DAY_CHECK_ENABLED` env var and `--force-run` for GitHub Actions** (#466)
+- 🐛 **Agent pipeline preserved resolved stock names** (#464) — placeholder names no longer leak into reports
+- 🐛 **Code cleanup** (#462, Fixes #422)
+- 🐛 **WebUI auto-build on startup** (#460)
+- 🐛 **ARCH_ARGS unbound variable** (#458)
+- 🐛 **Time zone inconsistency & right panel flash** (#439)
+
+### Docs
+- 📝 Clarify potential ambiguities in code (#343)
+- 📝 ENABLE_EASTMONEY_PATCH guidance for Issue #453 (#456)
+
+## [3.4.0] - 2026-02-27
+
+### Added
+- 📡 **LiteLLM Direct Integration + Multi API Key Support** (#454, Fixes #421 #428)
+  - Removed native SDKs (google-generativeai, google-genai, anthropic); unified through `litellm>=1.80.10`
+  - New config: `LITELLM_MODEL`, `LITELLM_FALLBACK_MODELS`, `GEMINI_API_KEYS`, `ANTHROPIC_API_KEYS`, `OPENAI_API_KEYS`
+  - Multi-key auto-builds LiteLLM Router (simple-shuffle) with 429 cooldown
+  - **Breaking**: `.env` `GEMINI_MODEL` (no prefix) only for fallback; explicit config must include provider prefix
+
+### Changed
+- ♻️ **Notification Refactoring** (#435) — extracted 10 sender classes into `src/notification_sender/`
+
+### Fixed
+- 🐛 LLM NoneType crash, history API 422, sniper points extraction
+- 🐛 Auto-build frontend on WebUI startup — `WEBUI_AUTO_BUILD` env var (default `true`)
+- 🐛 Docker explicit project name (#448)
+- 🐛 Bocha search SSL retry (#445, #446) — transient errors retry up to 3 times
+- 🐛 Gemini google-genai SDK migration (Fixes #440, #444)
+- 🐛 Mobile home page scrolling (Fixes #419, #433)
+- 🐛 History list scroll reset (#431)
+- 🐛 Settings save button false positive (fixes #417, #430)
+
+## [3.3.22] - 2026-02-26
+
+### Added
+- 💬 **Chat History Persistence** (Fixes #400, #414) — `/chat` page survives refresh, sidebar session list
+- 🎨 Project VI Assets — logo icon set, PSD, vector, banner (#425)
+- 🚀 Desktop CI Auto-Release (#426) — Windows + macOS parallel builds
+
+### Fixed
+- 🐛 Agent Reasoning 400 & LiteLLM Proxy (fixes #409, #427)
+- 🐛 Discord chunked sending (#413) — `DISCORD_MAX_WORDS` config
+- 🐛 yfinance shared DataFrame (#412)
+- 🐛 sniper_points parsing (#408)
+- 🐛 Agent framework category missing (#406)
+- 🐛 Date inconsistency & query id (fixes #322, #363)
+
+## [3.3.12] - 2026-02-24
+
+### Added
+- 📈 **Intraday Realtime Technical Indicators** (Issue #234, #397) — MA calculated from realtime price, config: `ENABLE_REALTIME_TECHNICAL_INDICATORS`
+- 🤖 **Agent Strategy Chat** (#367) — full ReAct pipeline, 11 YAML strategies, SSE streaming, multi-turn chat
+- 📢 PushPlus Group Push — `PUSHPLUS_TOPIC` (#402)
+- 📅 Trading Day Check (Issue #373, #375) — `TRADING_DAY_CHECK_ENABLED`, `--force-run`
+
+### Fixed
+- 🐛 DeepSeek reasoning mode (Issue #379, #386)
+- 🐛 Agent news intel persistence (Fixes #396, #405)
+- 🐛 Bare except clauses replaced with `except Exception` (#398)
+- 🐛 UUID fallback for HTTP non-secure context (fixes #377, #381)
+- 🐛 Docker DNS resolution (Fixes #372, #374)
+- 🐛 Agent session/strategy bugs — multiple follow-up fixes for #367
+- 🐛 yfinance parallel download data filtering
+
+### Changed
+- Market review strategy consistency — unified cn/us template
+- Agent test assertions updated (`6 -> 11`)
+
+
+## [3.2.11] - 2026-02-23
+
+### 修复（#patch）
+- 🐛 **StockTrendAnalyzer 从未执行** (Issue #357)
+  - 根因：`get_analysis_context` 仅返回 2 天数据且无 `raw_data`，pipeline 中 `raw_data in context` 始终为 False
+  - 修复：Step 3 直接调用 `get_data_range` 获取 90 日历天（约 60 交易日）历史数据用于趋势分析
+  - 改善：趋势分析失败时用 `logger.warning(..., exc_info=True)` 记录完整 traceback
+
+## [3.2.10] - 2026-02-22
+
+### 新增
+- ⚙️ 支持 `RUN_IMMEDIATELY` 配置项，设为 `true` 时定时任务触发后立即执行一次分析，无需等待首个定时点
+
+### 修复
+- 🐛 修复 Web UI 页面居中问题
+- 🐛 修复 Settings 返回 500 错误
+
+## [3.2.9] - 2026-02-22
+
+### 修复
+- 🐛 **ETF 分析仅关注指数走势**（Issue #274）
+  - 美股/港股 ETF（如 VOO、QQQ）与 A 股 ETF 不再纳入基金公司层面风险（诉讼、声誉等）
+  - 搜索维度：ETF/指数专用 risk_check、earnings、industry 查询，避免命中基金管理人新闻
+  - AI 提示：指数型标的分析约束，`risk_alerts` 不得出现基金管理人公司经营风险
+
+## [3.2.8] - 2026-02-21
+
+### 修复
+- 🐛 **BOT 与 WEB UI 股票代码大小写统一**（Issue #355）
+  - BOT `/analyze` 与 WEB UI 触发分析的股票代码统一为大写（如 `aapl` → `AAPL`）
+  - 新增 `canonical_stock_code()`，在 BOT、API、Config、CLI、task_queue 入口处规范化
+  - 历史记录与任务去重逻辑可正确识别同一股票（大小写不再影响）
+
+## [3.2.7] - 2026-02-20
+
+### 新增
+- 🔐 **Web 页面密码验证**（Issue #320, #349）
+  - 支持 `ADMIN_AUTH_ENABLED=true` 启用 Web 登录保护
+  - 首次访问在网页设置初始密码；支持「系统设置 > 修改密码」和 CLI `python -m src.auth reset_password` 重置
+
+## [3.2.6] - 2026-02-20
+### ⚠️ 破坏性变更（Breaking Changes）
+
+- **历史记录 API 变更 (Issue #322)**
+  - 路由变更：`GET /api/v1/history/{query_id}` → `GET /api/v1/history/{record_id}`
+  - 参数变更：`query_id` (字符串) → `record_id` (整数)
+  - 新闻接口变更：`GET /api/v1/history/{query_id}/news` → `GET /api/v1/history/{record_id}/news`
+  - 原因：`query_id` 在批量分析时可能重复，无法唯一标识单条历史记录。改用数据库主键 `id` 确保唯一性
+  - 影响范围：使用旧版历史详情 API 的所有客户端需同步更新
 
 ### 修复
 - 修复美股（如 ADBE）技术指标矛盾：akshare 美股复权数据异常，统一美股历史数据源为 YFinance（Issue #311）
+- 🐛 **历史记录查询和显示问题 (Issue #322)**
+  - 修复历史记录列表查询中日期不一致问题：使用明天作为 endDate，确保包含今天全天的数据
+  - 修复服务器 UI 报告选择问题：原因是多条记录共享同一 `query_id`，导致总是显示第一条。现改用 `analysis_history.id` 作为唯一标识
+  - 历史详情、新闻接口及前端组件已全面适配 `record_id`
+  - 新增后台轮询（每 30s）与页面可见性变更时静默刷新历史列表，确保 CLI 发起的分析完成后前端能及时同步，使用 `silent` 模式避免触发 loading 状态
 - 🐛 **美股指数实时行情与日线数据** (Issue #273)
   - 修复 SPX、DJI、IXIC、NDX、VIX、RUT 等美股指数无法获取实时行情的问题
   - 新增 `us_index_mapping` 模块，将用户输入（如 SPX）映射为 Yahoo Finance 符号（如 ^GSPC）
@@ -19,74 +161,166 @@
   - 消除重复的美股识别逻辑，统一使用 `is_us_stock_code()` 函数
 
 ### 优化
-- 🎨 **首页输入栏布局对齐优化**
+- 🎨 **首页输入栏与 Market Sentiment 布局对齐优化**
   - 股票代码输入框左缘与历史记录 glass-card 框左对齐
   - 分析按钮右缘与 Market Sentiment 外框右对齐
   - Market Sentiment 卡片向下拉伸填满格子，消除与 STRATEGY POINTS 之间的空隙
   - 窄屏时输入栏填满宽度，响应式对齐保持一致
+
+## [3.2.5] - 2026-02-19
+
+### 新增
+- 🌍 **大盘复盘可选区域**（Issue #299）
+  - 支持 `MARKET_REVIEW_REGION` 环境变量：`cn`（A股）、`us`（美股）、`both`（两者）
+  - us 模式使用 SPX/纳斯达克/道指/VIX 等指数；both 模式可同时复盘 A 股与美股
+  - 默认 `cn`，保持向后兼容
+
+## [3.2.4] - 2026-02-18
+
+### 修复
+- 🐛 **统一美股数据源为 YFinance**（Issue #311）
+  - akshare 美股复权数据异常，统一美股历史数据源为 YFinance
+  - 修复 ADBE 等美股股票技术指标矛盾问题
+
+## [3.2.3] - 2026-02-18
+
+### 修复
+- 🐛 **标普500实时数据缺失**（Issue #273）
+  - 修复 SPX、DJI、IXIC、NDX、VIX、RUT 等美股指数无法获取实时行情的问题
+  - 新增 `us_index_mapping` 模块，将用户输入（如 SPX）映射为 Yahoo Finance 符号（如 `^GSPC`）
+  - 美股指数与美股股票日线数据直接路由至 YfinanceFetcher，避免遍历不支持的数据源
+
+## [3.2.2] - 2026-02-16
+
+### 新增
+- 📊 **PE 指标支持**（Issue #296）
+  - AI System Prompt 增加 PE 估值关注
+- 📰 **新闻时效性筛查**（Issue #296）
+  - `NEWS_MAX_AGE_DAYS`：新闻最大时效（天），默认 3，避免使用过时信息
+- 📈 **强势趋势股乖离率放宽**（Issue #296）
+  - `BIAS_THRESHOLD`：乖离率阈值（%），默认 5.0，可配置
+  - 强势趋势股（多头排列且趋势强度 ≥70）自动放宽乖离率到 1.5 倍
+
+## [3.2.1] - 2026-02-16
+
+### 新增
+- 🔧 **东财接口补丁可配置开关**
+  - 支持 `EFINANCE_PATCH_ENABLED` 环境变量开关东财接口补丁（默认 `true`）
+  - 补丁不可用时可降级关闭，避免影响主流程
+
+## [3.2.0] - 2026-02-15
+
+### 新增
 - 🔒 **CI 门禁统一（P0）**
   - 新增 `scripts/ci_gate.sh` 作为后端门禁单一入口
   - 主 CI 改为 `backend-gate`、`docker-build`、`web-gate` 三段式
   - CI 触发改为所有 PR，避免 Required Checks 因路径过滤缺失而卡住合并
   - `web-gate` 支持前端路径变更按需触发
-  - 新增 `network-smoke` 工作流承载非阻断网络场景回归（`pytest -m network` + `test.sh quick`）
-- 🔍 **PR 审查门槛收紧（P0）**
-  - `pr-review` 中 flake8 严重错误改为阻断，不再仅告警
+  - 新增 `network-smoke` 工作流承载非阻断网络场景回归
 - 📦 **发布链路收敛（P0）**
   - `docker-publish` 调整为 tag 主触发，并增加发布前门禁校验
-  - 手动发布增加 `release_tag` 输入与 semver/changelog 强校验，避免绕过版本规范
-  - 发布前新增 `README.md` 和 `docs/CHANGELOG.md` 校验
+  - 手动发布增加 `release_tag` 输入与 semver/changelog 强校验
   - 发布前新增 Docker smoke（关键模块导入）
 - 📝 **PR 模板升级（P0）**
   - 增加背景、范围、验证命令与结果、回滚方案、Issue 关联等必填项
 - 🤖 **AI 审查覆盖增强（P0）**
-  - `pr-review` 将 `.github/workflows/**` 与 `.github/scripts/**` 纳入可审查范围
-  - 修复自动标签步骤在 `pull_request_target` 事件下不执行的问题
+  - `pr-review` 纳入 `.github/workflows/**` 范围
   - 新增 `AI_REVIEW_STRICT` 开关，可选将 AI 审查失败升级为阻断
 
+## [3.1.13] - 2026-02-15
+
 ### 新增
-- **大盘复盘可选区域** (Issue #299)
-  - 支持 `MARKET_REVIEW_REGION` 环境变量：cn（A股）、us（美股）、both（两者）
-  - us 模式适合仅关注美股的用户，使用 SPX/纳斯达克/道指/VIX 等指数；both 模式可同时复盘 A 股与美股
-  - 默认 cn，保持向后兼容
-- 📊 **仅分析结果摘要** (Issue #262)
+- 📊 **仅分析结果摘要**（Issue #262）
   - 支持 `REPORT_SUMMARY_ONLY` 环境变量，设为 `true` 时只推送汇总，不含个股详情
   - 默认 `false`，多股时适合快速浏览
-- **新闻时效性与乖离率优化** (Issue #296)
-  - `NEWS_MAX_AGE_DAYS`：新闻最大时效（天），默认 3，避免使用过时信息
-  - `BIAS_THRESHOLD`：乖离率阈值（%），默认 5.0，可配置
-  - 强势趋势股（多头排列且趋势强度 ≥70）自动放宽乖离率到 1.5 倍，避免错杀 LITE/SNDK 等趋势股
-  - AI System Prompt 增加 PE 估值关注和强势趋势放宽软性引导
-- 📷 **Markdown 转图片** (Issue #289)
-  - 支持 `MARKDOWN_TO_IMAGE_CHANNELS` 配置，对 Telegram、企业微信、自定义 Webhook（Discord）、邮件以图片形式发送报告
-  - 邮件为内联附件，增强对不支持 HTML 客户端的兼容性
-  - 需安装 `wkhtmltopdf` 和 `imgkit`
-- 🤖 **Anthropic Claude API 支持** (Issue #257)
-  - 支持 `ANTHROPIC_API_KEY`、`ANTHROPIC_MODEL`、`ANTHROPIC_TEMPERATURE`、`ANTHROPIC_MAX_TOKENS` 环境变量
-  - AI 分析优先级：Gemini > Anthropic > OpenAI
-- 📷 **从图片识别股票代码** (Issue #257)
-  - 上传自选股截图，通过 Vision LLM 自动提取股票代码
-  - 设置页「基础设置」中新增「从图片添加」区块
-  - API: `POST /api/v1/stocks/extract-from-image`（表单字段 `file`）
-  - 支持 JPEG/PNG/WebP/GIF，最大 5MB
-  - 支持 `OPENAI_VISION_MODEL` 单独配置图片识别模型（部分第三方模型不支持图像）
-- ⚙️ **通达信数据源手动配置** (Issue #257)
-  - 支持 `PYTDX_HOST`、`PYTDX_PORT` 或 `PYTDX_SERVERS` 配置自建通达信服务器
-- 🔐 **Webhook 证书校验开关** (Issue #265)
-  - 支持 `WEBHOOK_VERIFY_SSL` 环境变量，可关闭 HTTPS 证书校验以支持自签名证书
-  - 默认保持校验，关闭存在 MITM 风险，仅建议在可信内网使用
-- 📧 **股票分组发往不同邮箱** (Issue #268)
-  - 支持 `STOCK_GROUP_N` + `EMAIL_GROUP_N` 配置，不同股票组报告发送到对应邮箱
-  - 大盘复盘发往所有配置的邮箱
-- 📧 **个股与大盘复盘合并推送** (Issue #190)
-  - 支持 `MERGE_EMAIL_NOTIFICATION` 环境变量，设为 `true` 时将个股分析和大盘复盘合并为一次推送
+
+## [3.1.12] - 2026-02-15
+
+### 新增
+- 📧 **个股与大盘复盘合并推送**（Issue #190）
+  - 支持 `MERGE_EMAIL_NOTIFICATION` 环境变量，设为 `true` 时将个股分析与大盘复盘合并为一次推送
   - 默认 `false`，减少邮件数量、降低被识别为垃圾邮件的风险
 
-### 优化
-- 图片识别 API 仅保留 `file` 表单字段，移除 `image` 字段以统一接口
-- 图片识别 Vision API 超时 60 秒，前端请求超时 60 秒
-- 配置冲突（409）时自动刷新并提示用户再次合并
-- 请求超时/超频时展示专属错误提示
+## [3.1.11] - 2026-02-15
+
+### 新增
+- 🤖 **Anthropic Claude API 支持**（Issue #257）
+  - 支持 `ANTHROPIC_API_KEY`、`ANTHROPIC_MODEL`、`ANTHROPIC_TEMPERATURE`、`ANTHROPIC_MAX_TOKENS`
+  - AI 分析优先级：Gemini > Anthropic > OpenAI
+- 📷 **从图片识别股票代码**（Issue #257）
+  - 上传自选股截图，通过 Vision LLM 自动提取股票代码
+  - API: `POST /api/v1/stocks/extract-from-image`；支持 JPEG/PNG/WebP/GIF，最大 5MB
+  - 支持 `OPENAI_VISION_MODEL` 单独配置图片识别模型
+- ⚙️ **通达信数据源手动配置**（Issue #257）
+  - 支持 `PYTDX_HOST`、`PYTDX_PORT` 或 `PYTDX_SERVERS` 配置自建通达信服务器
+
+## [3.1.10] - 2026-02-15
+
+### 新增
+- ⚙️ **立即运行配置**（Issue #332）
+  - 支持 `RUN_IMMEDIATELY` 环境变量，`true` 时定时任务启动后立即执行一次
+- 🐛 修复 Docker 构建问题
+
+## [3.1.9] - 2026-02-14
+
+### 新增
+- 🔌 **东财接口补丁机制**
+  - 新增 `patch/eastmoney_patch.py` 修复 efinance 上游接口变更
+  - 不影响其他数据源的正常运行
+
+## [3.1.8] - 2026-02-14
+
+### 新增
+- 🔐 **Webhook 证书校验开关**（Issue #265）
+  - 支持 `WEBHOOK_VERIFY_SSL` 环境变量，可关闭 HTTPS 证书校验以支持自签名证书
+  - 默认保持校验，关闭存在 MITM 风险，仅建议在可信内网使用
+
+## [3.1.7] - 2026-02-14
+
+### 修复
+- 🐛 修复包导入错误（package import error）
+
+## [3.1.6] - 2026-02-13
+
+### 修复
+- 🐛 修复 `news_intel` 中 `query_id` 不一致问题
+
+## [3.1.5] - 2026-02-13
+
+### 新增
+- 📷 **Markdown 转图片通知**（Issue #289）
+  - 支持 `MARKDOWN_TO_IMAGE_CHANNELS` 配置，对 Telegram、企业微信、自定义 Webhook（Discord）、邮件发送图片格式报告
+  - 邮件为内联附件，增强对不支持 HTML 客户端的兼容性
+  - 需安装 `wkhtmltopdf` 和 `imgkit`
+
+## [3.1.4] - 2026-02-12
+
+### 新增
+- 📧 **股票分组发往不同邮箱**（Issue #268）
+  - 支持 `STOCK_GROUP_N` + `EMAIL_GROUP_N` 配置，不同股票组报告发送到对应邮箱
+  - 大盘复盘发往所有配置的邮箱
+
+## [3.1.3] - 2026-02-12
+
+### 修复
+- 🐛 修复 Docker 内运行时通过页面修改配置报错 `[Errno 16] Device or resource busy` 的问题
+
+## [3.1.2] - 2026-02-11
+
+### 修复
+- 🐛 修复 Docker 一致性问题，解决关键批次处理与通知 Bug
+
+## [3.1.1] - 2026-02-11
+
+### 变更
+- ♻️ `API_HOST` → `WEBUI_HOST`：Docker Compose 配置项统一
+
+## [3.1.0] - 2026-02-11
+
+### 新增
+- 📊 **ETF 支持增强与代码规范化**
+  - 统一各数据源 ETF 代码处理逻辑
+  - 新增 `canonical_stock_code()` 统一代码格式，确保数据源路由正确
 
 ## [3.0.5] - 2026-02-08
 
@@ -511,7 +745,12 @@
 
 ---
 
-[Unreleased]: https://github.com/ZhuLinsen/daily_stock_analysis/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/ZhuLinsen/daily_stock_analysis/compare/v3.4.7...HEAD
+[3.4.7]: https://github.com/ZhuLinsen/daily_stock_analysis/compare/v3.4.0...v3.4.7
+[3.4.0]: https://github.com/ZhuLinsen/daily_stock_analysis/compare/v3.3.22...v3.4.0
+[3.3.22]: https://github.com/ZhuLinsen/daily_stock_analysis/compare/v3.3.12...v3.3.22
+[3.3.12]: https://github.com/ZhuLinsen/daily_stock_analysis/compare/v3.2.11...v3.3.12
+[3.2.11]: https://github.com/ZhuLinsen/daily_stock_analysis/compare/v3.2.10...v3.2.11
 [2.3.0]: https://github.com/ZhuLinsen/daily_stock_analysis/compare/v2.2.5...v2.3.0
 [2.2.5]: https://github.com/ZhuLinsen/daily_stock_analysis/compare/v2.2.4...v2.2.5
 [2.2.4]: https://github.com/ZhuLinsen/daily_stock_analysis/compare/v2.2.3...v2.2.4

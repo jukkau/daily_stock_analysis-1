@@ -150,7 +150,7 @@ export function useTaskStream(options: UseTaskStreamOptions = {}): UseTaskStream
     }
 
     const url = analysisApi.getTaskStreamUrl();
-    const eventSource = new EventSource(url);
+    const eventSource = new EventSource(url, { withCredentials: true });
     eventSourceRef.current = eventSource;
 
     // 连接成功
