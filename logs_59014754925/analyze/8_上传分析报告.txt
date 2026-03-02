@@ -1,0 +1,32 @@
+﻿2026-03-02T07:44:04.8174412Z ##[group]Run actions/upload-artifact@v4
+2026-03-02T07:44:04.8174715Z with:
+2026-03-02T07:44:04.8174925Z   name: analysis-reports-10
+2026-03-02T07:44:04.8175171Z   path: reports/
+logs/
+
+2026-03-02T07:44:04.8175396Z   retention-days: 30
+2026-03-02T07:44:04.8175616Z   if-no-files-found: warn
+2026-03-02T07:44:04.8175851Z   compression-level: 6
+2026-03-02T07:44:04.8176067Z   overwrite: false
+2026-03-02T07:44:04.8176297Z   include-hidden-files: false
+2026-03-02T07:44:04.8176538Z env:
+2026-03-02T07:44:04.8176790Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-03-02T07:44:04.8177220Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib/pkgconfig
+2026-03-02T07:44:04.8177633Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-03-02T07:44:04.8178004Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-03-02T07:44:04.8178397Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-03-02T07:44:04.8178767Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib
+2026-03-02T07:44:04.8179109Z ##[endgroup]
+2026-03-02T07:44:05.0466576Z Multiple search paths detected. Calculating the least common ancestor of all paths
+2026-03-02T07:44:05.0473596Z The least common ancestor is /home/runner/work/daily_stock_analysis-1/daily_stock_analysis-1. This will be the root directory of the artifact
+2026-03-02T07:44:05.0476021Z With the provided path, there will be 4 files uploaded
+2026-03-02T07:44:05.0476916Z Artifact name is valid!
+2026-03-02T07:44:05.0478462Z Root directory input is valid!
+2026-03-02T07:44:05.1282111Z Beginning upload of artifact content to blob storage
+2026-03-02T07:44:05.3055575Z Uploaded bytes 441917
+2026-03-02T07:44:05.3235624Z Finished uploading artifact content to blob storage!
+2026-03-02T07:44:05.3239278Z SHA256 digest of uploaded artifact zip is a7a9137928e828befa3fd3e55ed9a8a55f328c3d3d84de231c5ce70724ec8e82
+2026-03-02T07:44:05.3241351Z Finalizing artifact upload
+2026-03-02T07:44:05.4094615Z Artifact analysis-reports-10.zip successfully finalized. Artifact ID 5717021785
+2026-03-02T07:44:05.4097190Z Artifact analysis-reports-10 has been successfully uploaded! Final size is 441917 bytes. Artifact ID is 5717021785
+2026-03-02T07:44:05.4104698Z Artifact download URL: https://github.com/jukkau/daily_stock_analysis-1/actions/runs/22565762874/artifacts/5717021785

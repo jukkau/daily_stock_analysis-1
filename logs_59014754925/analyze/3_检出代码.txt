@@ -1,0 +1,72 @@
+﻿2026-03-02T07:27:44.0138256Z ##[group]Run actions/checkout@v4
+2026-03-02T07:27:44.0138662Z with:
+2026-03-02T07:27:44.0138945Z   repository: jukkau/daily_stock_analysis-1
+2026-03-02T07:27:44.0139511Z   token: ***
+2026-03-02T07:27:44.0139767Z   ssh-strict: true
+2026-03-02T07:27:44.0140021Z   ssh-user: git
+2026-03-02T07:27:44.0140277Z   persist-credentials: true
+2026-03-02T07:27:44.0140550Z   clean: true
+2026-03-02T07:27:44.0140817Z   sparse-checkout-cone-mode: true
+2026-03-02T07:27:44.0141124Z   fetch-depth: 1
+2026-03-02T07:27:44.0141369Z   fetch-tags: false
+2026-03-02T07:27:44.0141623Z   show-progress: true
+2026-03-02T07:27:44.0141880Z   lfs: false
+2026-03-02T07:27:44.0142121Z   submodules: false
+2026-03-02T07:27:44.0142376Z   set-safe-directory: true
+2026-03-02T07:27:44.0143043Z ##[endgroup]
+2026-03-02T07:27:44.1228622Z Syncing repository: jukkau/daily_stock_analysis-1
+2026-03-02T07:27:44.1230122Z ##[group]Getting Git version info
+2026-03-02T07:27:44.1230716Z Working directory is '/home/runner/work/daily_stock_analysis-1/daily_stock_analysis-1'
+2026-03-02T07:27:44.1231533Z [command]/usr/bin/git version
+2026-03-02T07:27:44.1278317Z git version 2.53.0
+2026-03-02T07:27:44.1303432Z ##[endgroup]
+2026-03-02T07:27:44.1318047Z Temporarily overriding HOME='/home/runner/work/_temp/6bf46695-c3ea-4817-9e4e-205b5903d2b5' before making global git config changes
+2026-03-02T07:27:44.1319193Z Adding repository directory to the temporary git global config as a safe directory
+2026-03-02T07:27:44.1332158Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/daily_stock_analysis-1/daily_stock_analysis-1
+2026-03-02T07:27:44.1374559Z Deleting the contents of '/home/runner/work/daily_stock_analysis-1/daily_stock_analysis-1'
+2026-03-02T07:27:44.1378304Z ##[group]Initializing the repository
+2026-03-02T07:27:44.1382682Z [command]/usr/bin/git init /home/runner/work/daily_stock_analysis-1/daily_stock_analysis-1
+2026-03-02T07:27:44.1469724Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-03-02T07:27:44.1470774Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-03-02T07:27:44.1471696Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-03-02T07:27:44.1472399Z hint: call:
+2026-03-02T07:27:44.1472961Z hint:
+2026-03-02T07:27:44.1473454Z hint: 	git config --global init.defaultBranch <name>
+2026-03-02T07:27:44.1474004Z hint:
+2026-03-02T07:27:44.1474540Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-03-02T07:27:44.1475394Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-03-02T07:27:44.1476094Z hint:
+2026-03-02T07:27:44.1476469Z hint: 	git branch -m <name>
+2026-03-02T07:27:44.1476885Z hint:
+2026-03-02T07:27:44.1477262Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-03-02T07:27:44.1477964Z Initialized empty Git repository in /home/runner/work/daily_stock_analysis-1/daily_stock_analysis-1/.git/
+2026-03-02T07:27:44.1487589Z [command]/usr/bin/git remote add origin https://github.com/jukkau/daily_stock_analysis-1
+2026-03-02T07:27:44.1526856Z ##[endgroup]
+2026-03-02T07:27:44.1527536Z ##[group]Disabling automatic garbage collection
+2026-03-02T07:27:44.1531550Z [command]/usr/bin/git config --local gc.auto 0
+2026-03-02T07:27:44.1563355Z ##[endgroup]
+2026-03-02T07:27:44.1564015Z ##[group]Setting up auth
+2026-03-02T07:27:44.1570345Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-03-02T07:27:44.1604380Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-03-02T07:27:44.1944970Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-03-02T07:27:44.1981217Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-03-02T07:27:44.2240181Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-03-02T07:27:44.2284363Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-03-02T07:27:44.2549486Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-03-02T07:27:44.2588619Z ##[endgroup]
+2026-03-02T07:27:44.2589395Z ##[group]Fetching the repository
+2026-03-02T07:27:44.2597853Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +027fd5ef4e21d73531f086fee9efc07269c12613:refs/remotes/origin/main
+2026-03-02T07:27:45.1922689Z From https://github.com/jukkau/daily_stock_analysis-1
+2026-03-02T07:27:45.1923673Z  * [new ref]         027fd5ef4e21d73531f086fee9efc07269c12613 -> origin/main
+2026-03-02T07:27:45.1961626Z ##[endgroup]
+2026-03-02T07:27:45.1962166Z ##[group]Determining the checkout info
+2026-03-02T07:27:45.1964400Z ##[endgroup]
+2026-03-02T07:27:45.1970139Z [command]/usr/bin/git sparse-checkout disable
+2026-03-02T07:27:45.2019317Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-03-02T07:27:45.2052845Z ##[group]Checking out the ref
+2026-03-02T07:27:45.2058533Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-03-02T07:27:45.4313059Z Switched to a new branch 'main'
+2026-03-02T07:27:45.4313991Z branch 'main' set up to track 'origin/main'.
+2026-03-02T07:27:45.4338498Z ##[endgroup]
+2026-03-02T07:27:45.4382751Z [command]/usr/bin/git log -1 --format=%H
+2026-03-02T07:27:45.4409313Z 027fd5ef4e21d73531f086fee9efc07269c12613
