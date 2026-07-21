@@ -15,6 +15,7 @@ from email.header import Header
 from email.utils import formataddr
 import smtplib
 
+from data_provider.base import normalize_stock_code
 from src.config import Config
 from src.formatters import markdown_to_html_document
 
@@ -72,13 +73,16 @@ class EmailSender:
         """
         Look up email receivers for given stock codes based on stock_email_groups.
         Returns union of receivers for all matching groups; falls back to default if none match.
+        Stock codes are canonicalized before comparison so that equivalent
+        formats (e.g. SH600519 vs 600519) match correctly.
         """
         if not stock_codes or not self._stock_email_groups:
             return self._email_config['receivers']
+        normalized_codes = [normalize_stock_code(c) for c in stock_codes]
         seen: set = set()
         result: List[str] = []
         for stocks, emails in self._stock_email_groups:
-            for code in stock_codes:
+            for code in normalized_codes:
                 if code in stocks:
                     for e in emails:
                         if e not in seen:
@@ -128,7 +132,12 @@ class EmailSender:
                 pass
     
     def send_to_email(
-        self, content: str, subject: Optional[str] = None, receivers: Optional[List[str]] = None
+        self,
+        content: str,
+        subject: Optional[str] = None,
+        receivers: Optional[List[str]] = None,
+        *,
+        timeout_seconds: Optional[float] = None,
     ) -> bool:
         """
         通过 SMTP 发送邮件（自动识别 SMTP 服务器）
@@ -190,10 +199,10 @@ class EmailSender:
             # 根据配置选择连接方式
             if use_ssl:
                 # SSL 连接（端口 465）
-                server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30)
+                server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=timeout_seconds or 30)
             else:
                 # TLS 连接（端口 587）
-                server = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
+                server = smtplib.SMTP(smtp_server, smtp_port, timeout=timeout_seconds or 30)
                 server.starttls()
             
             server.login(sender, password)

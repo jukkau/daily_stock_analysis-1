@@ -1,17 +1,24 @@
 import { useState } from 'react';
 import type React from 'react';
-import { Badge, Select, Input } from '../common';
+import { Badge, Button, Select, Input } from '../common';
 import type { ConfigValidationIssue, SystemConfigFieldSchema, SystemConfigItem } from '../../types/systemConfig';
-import { getFieldDescriptionZh, getFieldTitleZh } from '../../utils/systemConfigI18n';
+import { useUiLanguage } from '../../contexts/UiLanguageContext';
+import { getSettingsHelpContent } from '../../locales/settingsHelp';
+import { getFieldDescriptionZh, getFieldOptionLabel, getFieldTitleZh } from '../../utils/systemConfigI18n';
+import type { UiLanguage, UiTextKey } from '../../i18n/uiText';
 import { cn } from '../../utils/cn';
+import { SettingsHelpButton } from './SettingsHelpButton';
 
-function normalizeSelectOptions(options: SystemConfigFieldSchema['options'] = []) {
+function normalizeSelectOptions(key: string, options: SystemConfigFieldSchema['options'] = [], locale: UiLanguage) {
   return options.map((option) => {
     if (typeof option === 'string') {
-      return { value: option, label: option };
+      return { value: option, label: getFieldOptionLabel(key, option, undefined, locale) };
     }
 
-    return option;
+    return {
+      ...option,
+      label: getFieldOptionLabel(key, option.value, option.label, locale),
+    };
   });
 }
 
@@ -37,6 +44,22 @@ function inferPasswordIconType(key: string): 'password' | 'key' {
   return key.toUpperCase().includes('PASSWORD') ? 'password' : 'key';
 }
 
+function resolveDisplayValue(item: SystemConfigItem, value: string): string {
+  const schema = item.schema;
+
+  if (
+    schema?.uiControl === 'select'
+    && !value
+    && item.rawValueExists === false
+    && schema.defaultValue !== undefined
+    && schema.defaultValue !== null
+  ) {
+    return schema.defaultValue;
+  }
+
+  return value;
+}
+
 interface SettingsFieldProps {
   item: SystemConfigItem;
   value: string;
@@ -53,9 +76,11 @@ function renderFieldControl(
   isPasswordEditable: boolean,
   onPasswordFocus: () => void,
   controlId: string,
+  language: UiLanguage,
+  t: (key: UiTextKey) => string,
 ) {
   const schema = item.schema;
-  const commonClass = 'input-terminal border-border/55 bg-card/94 hover:border-border/75';
+  const commonClass = 'input-surface input-focus-glow h-11 w-full rounded-xl border bg-transparent px-4 text-sm transition-all focus:outline-none disabled:cursor-not-allowed disabled:opacity-60';
   const controlType = schema?.uiControl ?? 'text';
   const isMultiValue = isMultiValueField(item);
 
@@ -63,7 +88,7 @@ function renderFieldControl(
     return (
       <textarea
         id={controlId}
-        className={`${commonClass} min-h-[92px] resize-y`}
+        className={`${commonClass} min-h-[92px] resize-y py-3`}
         value={value}
         disabled={disabled || !schema?.isEditable}
         onChange={(event) => onChange(event.target.value)}
@@ -77,9 +102,9 @@ function renderFieldControl(
           id={controlId}
           value={value}
           onChange={onChange}
-          options={normalizeSelectOptions(schema.options)}
+          options={normalizeSelectOptions(item.key, schema.options, language)}
           disabled={disabled || !schema.isEditable}
-          placeholder="请选择"
+          placeholder={t('common.selectPlaceholder')}
         />
       );
   }
@@ -95,7 +120,7 @@ function renderFieldControl(
           disabled={disabled || !schema?.isEditable}
           onChange={(event) => onChange(event.target.checked ? 'true' : 'false')}
         />
-        <span className="text-sm text-secondary-text">{checked ? '已启用' : '未启用'}</span>
+        <span className="text-sm text-secondary-text">{checked ? t('common.enabled') : t('common.disabled')}</span>
       </label>
     );
   }
@@ -127,29 +152,33 @@ function renderFieldControl(
                   }}
                 />
               </div>
-              <button
+              <Button
                 type="button"
-                className="inline-flex h-11 items-center justify-center rounded-xl border border-white/10 bg-white/5 px-3 text-xs text-muted-text transition-colors hover:bg-white/10 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-50"
+                variant="settings-secondary"
+                size="lg"
+                className="px-3 text-xs text-muted-text shadow-none hover:text-danger"
                 disabled={disabled || !schema?.isEditable || values.length <= 1}
                 onClick={() => {
                   const nextValues = values.filter((_, rowIndex) => rowIndex !== index);
                   onChange(serializeMultiValues(nextValues.length ? nextValues : ['']));
                 }}
               >
-                删除
-              </button>
+                {t('settings.fieldDelete')}
+              </Button>
             </div>
           ))}
 
           <div className="flex items-center gap-2">
-            <button
+            <Button
               type="button"
-              className="inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/5 px-3 py-1 text-xs text-secondary-text transition-colors hover:bg-white/10 hover:text-white"
+              variant="settings-secondary"
+              size="sm"
+              className="text-xs shadow-none"
               disabled={disabled || !schema?.isEditable}
               onClick={() => onChange(serializeMultiValues([...values, '']))}
             >
-              添加 Key
-            </button>
+              {t('settings.fieldAddKey')}
+            </Button>
           </div>
         </div>
       );
@@ -191,74 +220,93 @@ export const SettingsField: React.FC<SettingsFieldProps> = ({
   onChange,
   issues = [],
 }) => {
+  const { language, t } = useUiLanguage();
   const schema = item.schema;
   const isMultiValue = isMultiValueField(item);
-  const title = getFieldTitleZh(item.key, item.key);
-  const description = getFieldDescriptionZh(item.key, schema?.description);
+  const helpContent = getSettingsHelpContent(schema?.helpKey, schema?.description, language);
+  const localizationKey = schema?.key ?? item.key;
+  const fallbackTitle = schema?.title ?? item.key;
+  const title = language === 'zh'
+    ? getFieldTitleZh(localizationKey, getFieldTitleZh(item.key, fallbackTitle))
+    : fallbackTitle;
+  const description = language === 'en'
+    ? helpContent?.summary ?? schema?.description ?? ''
+    : getFieldDescriptionZh(localizationKey, getFieldDescriptionZh(item.key, schema?.description));
   const hasError = issues.some((issue) => issue.severity === 'error');
   const [isPasswordEditable, setIsPasswordEditable] = useState(false);
   const controlId = `setting-${item.key}`;
+  const displayValue = resolveDisplayValue(item, value);
 
   return (
     <div
       className={cn(
-        'rounded-[1.15rem] border bg-white/2 p-4 shadow-soft-card transition-all duration-200 hover:bg-white/5',
-        hasError ? 'border-danger/40' : 'border-white/10',
+        'grid gap-3 px-4 py-4 transition-colors duration-200 md:grid-cols-[minmax(0,250px)_minmax(0,1fr)] md:gap-6',
+        hasError ? 'bg-danger/5' : 'hover:bg-[var(--settings-surface-hover)]',
       )}
     >
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <label className="text-sm font-semibold text-white" htmlFor={controlId}>
-          {title}
-        </label>
-        {schema?.isSensitive ? (
-          <Badge variant="history" size="sm">
-            敏感
-          </Badge>
-        ) : null}
-        {!schema?.isEditable ? (
-          <Badge variant="default" size="sm">
-            只读
-          </Badge>
+      <div className="min-w-0 space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-sm font-semibold text-foreground" htmlFor={controlId}>
+            {title}
+          </label>
+          <SettingsHelpButton
+            fieldKey={localizationKey}
+            title={title}
+            schema={schema}
+            description={description}
+          />
+          {schema?.isSensitive ? (
+            <Badge variant="history" size="sm">
+              {t('common.sensitive')}
+            </Badge>
+          ) : null}
+          {!schema?.isEditable ? (
+            <Badge variant="default" size="sm">
+              {t('common.readOnly')}
+            </Badge>
+          ) : null}
+        </div>
+
+        {description ? (
+          <p className="text-xs leading-5 text-muted-text">
+            {description}
+          </p>
         ) : null}
       </div>
 
-      {description ? (
-        <p className="mb-3 text-xs leading-5 text-muted-text" title={description}>
-          {description}
-        </p>
-      ) : null}
-
-      <div>
+      <div className="min-w-0">
         {renderFieldControl(
           item,
-          value,
+          displayValue,
           disabled,
           (nextValue) => onChange(item.key, nextValue),
           isPasswordEditable,
           () => setIsPasswordEditable(true),
           controlId,
+          language,
+          t,
         )}
+
+        {schema?.isSensitive ? (
+          <p className="mt-2 text-[11px] leading-5 text-secondary-text">
+            {t('settings.fieldSensitiveHint')}
+            {isMultiValue ? t('settings.fieldSensitiveMultiHint') : ''}
+          </p>
+        ) : null}
+
+        {issues.length ? (
+          <div className="mt-2 space-y-1">
+            {issues.map((issue, index) => (
+              <p
+                key={`${issue.code}-${issue.key}-${index}`}
+                className={issue.severity === 'error' ? 'text-xs text-danger' : 'text-xs text-warning'}
+              >
+                {issue.message}
+              </p>
+            ))}
+          </div>
+        ) : null}
       </div>
-
-      {schema?.isSensitive ? (
-        <p className="mt-3 text-[11px] leading-5 text-secondary-text">
-          敏感内容默认隐藏，可点击眼睛图标查看明文。
-          {isMultiValue ? ' 支持添加多个输入框进行增删。' : ''}
-        </p>
-      ) : null}
-
-      {issues.length ? (
-        <div className="mt-2 space-y-1">
-          {issues.map((issue, index) => (
-            <p
-              key={`${issue.code}-${issue.key}-${index}`}
-              className={issue.severity === 'error' ? 'text-xs text-danger' : 'text-xs text-warning'}
-            >
-              {issue.message}
-            </p>
-          ))}
-        </div>
-      ) : null}
     </div>
   );
 };

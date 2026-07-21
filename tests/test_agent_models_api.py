@@ -4,10 +4,12 @@
 import asyncio
 import os
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from api.v1.endpoints import agent
 from src.config import Config
+from src.llm.backend_registry import GENERATION_ONLY_BACKEND_IDS
 from src.services.agent_model_service import list_agent_model_deployments
 
 
@@ -50,6 +52,22 @@ class AgentModelsApiTestCase(unittest.TestCase):
         self.assertTrue(deployments[0]["is_primary"])
         self.assertFalse("api_key" in str(deployments))
 
+    def test_models_endpoint_does_not_expose_local_cli_as_litellm_deployment(self) -> None:
+        for backend in sorted(GENERATION_ONLY_BACKEND_IDS):
+            with self.subTest(backend=backend):
+                config = _build_config(
+                    agent_generation_backend=backend,
+                    llm_models_source="litellm_config",
+                    llm_model_list=[
+                        {
+                            "model_name": "gemini-primary",
+                            "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "secret-1"},
+                        },
+                    ],
+                )
+
+                self.assertEqual(list_agent_model_deployments(config), [])
+
     def test_models_endpoint_returns_channel_deployments_with_api_base(self) -> None:
         config = _build_config(
             llm_channels=[{"name": "openai"}],
@@ -70,6 +88,53 @@ class AgentModelsApiTestCase(unittest.TestCase):
 
         self.assertEqual(deployments[0]["source"], "llm_channels")
         self.assertEqual(deployments[0]["api_base"], "https://api.example.com/v1")
+
+    def test_models_endpoint_does_not_return_hermes_only_deployment(self) -> None:
+        config = _build_config(
+            litellm_model="openai/hermes-agent",
+            llm_channels=[{"name": "hermes"}],
+            llm_models_source="llm_channels",
+            llm_model_list=[
+                {
+                    "model_name": "openai/hermes-agent",
+                    "litellm_params": {
+                        "model": "openai/hermes-agent",
+                        "api_key": "secret-h",
+                        "api_base": "http://127.0.0.1:8642/v1",
+                    },
+                    "model_info": {"dsa_channel": "hermes"},
+                }
+            ],
+        )
+
+        self.assertEqual(list_agent_model_deployments(config), [])
+
+    def test_models_endpoint_uses_agent_primary_override_for_primary_marker(self) -> None:
+        config = _build_config(
+            litellm_model="gemini/gemini-2.5-flash",
+            litellm_fallback_models=["openai/gpt-4o-mini"],
+            agent_litellm_model="openai/gpt-4o-mini",
+            llm_channels=[{"name": "mixed"}],
+            llm_models_source="llm_channels",
+            llm_model_list=[
+                {
+                    "model_name": "gemini/gemini-2.5-flash",
+                    "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "secret-g"},
+                },
+                {
+                    "model_name": "openai/gpt-4o-mini",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "secret-o"},
+                },
+            ],
+        )
+
+        deployments = list_agent_model_deployments(config)
+        by_model = {item["model"]: item for item in deployments}
+
+        self.assertTrue(by_model["openai/gpt-4o-mini"]["is_primary"])
+        self.assertFalse(by_model["openai/gpt-4o-mini"]["is_fallback"])
+        self.assertFalse(by_model["gemini/gemini-2.5-flash"]["is_primary"])
+        self.assertFalse(by_model["gemini/gemini-2.5-flash"]["is_fallback"])
 
     def test_models_endpoint_resolves_legacy_placeholders_to_real_models(self) -> None:
         config = _build_config(
@@ -210,6 +275,102 @@ class AgentModelsEndpointTestCase(unittest.TestCase):
         self.assertNotIn("api_key", str(payload))
 
 
+class AgentSkillsEndpointTestCase(unittest.TestCase):
+    def test_skills_endpoint_returns_skill_metadata_shape(self) -> None:
+        config = _build_config()
+        skill_manager = SimpleNamespace(
+            list_skills=lambda: [
+                SimpleNamespace(
+                    name="bull_trend",
+                    display_name="多头趋势",
+                    description="趋势跟随",
+                    user_invocable=True,
+                    default_priority=20,
+                    default_active=True,
+                ),
+                SimpleNamespace(
+                    name="chan_theory",
+                    display_name="缠论",
+                    description="结构分析",
+                    user_invocable=True,
+                    default_priority=40,
+                    default_active=False,
+                ),
+            ]
+        )
+
+        with patch("api.v1.endpoints.agent.get_config", return_value=config), patch(
+            "src.agent.factory.get_skill_manager",
+            return_value=skill_manager,
+        ):
+            payload = asyncio.run(agent.get_skills()).model_dump()
+
+        self.assertEqual(payload["default_skill_id"], "bull_trend")
+        self.assertEqual([item["id"] for item in payload["skills"]], ["bull_trend", "chan_theory"])
+
+    def test_legacy_strategies_endpoint_preserves_legacy_field_names(self) -> None:
+        config = _build_config()
+        skill_manager = SimpleNamespace(
+            list_skills=lambda: [
+                SimpleNamespace(
+                    name="bull_trend",
+                    display_name="多头趋势",
+                    description="趋势跟随",
+                    user_invocable=True,
+                    default_priority=20,
+                    default_active=True,
+                ),
+            ]
+        )
+
+        with patch("api.v1.endpoints.agent.get_config", return_value=config), patch(
+            "src.agent.factory.get_skill_manager",
+            return_value=skill_manager,
+        ):
+            payload = asyncio.run(agent.get_strategies()).model_dump()
+
+        self.assertNotIn("skills", payload)
+        self.assertEqual(payload["default_strategy_id"], "bull_trend")
+        self.assertEqual(
+            payload["strategies"],
+            [
+                {
+                    "id": "bull_trend",
+                    "name": "多头趋势",
+                    "description": "趋势跟随",
+                }
+            ],
+        )
+
+    def test_chat_request_empty_skills_clears_context_without_triggering_activate_all(self) -> None:
+        config = SimpleNamespace(is_agent_available=lambda: True)
+        executor = MagicMock()
+        executor.chat.return_value = SimpleNamespace(success=True, content="ok", error=None)
+        request = agent.ChatRequest(message="hello", skills=[], context={"skills": ["old_skill"]})
+        real_get_running_loop = asyncio.get_running_loop
+
+        class _ImmediateLoop:
+            def __init__(self, loop):
+                self._loop = loop
+
+            def run_in_executor(self, _executor, func):
+                future = self._loop.create_future()
+                future.set_result(func())
+                return future
+
+        with patch("api.v1.endpoints.agent.get_config", return_value=config), patch(
+            "api.v1.endpoints.agent._build_executor",
+            return_value=executor,
+        ) as mock_build_executor, patch(
+            "api.v1.endpoints.agent.asyncio.get_running_loop",
+            side_effect=lambda: _ImmediateLoop(real_get_running_loop()),
+        ):
+            payload = asyncio.run(agent.agent_chat(request)).model_dump()
+
+        mock_build_executor.assert_called_once_with(config, None)
+        executor.chat.assert_called_once()
+        self.assertEqual(executor.chat.call_args.kwargs["context"]["skills"], [])
+        self.assertEqual(payload["content"], "ok")
 class AgentModelsSourceDetectionTestCase(unittest.TestCase):
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])

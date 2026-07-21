@@ -3,7 +3,7 @@
 DecisionAgent — final synthesis and decision-making specialist.
 
 Responsible for:
-- Aggregating opinions from technical + intel + risk + strategy agents
+- Aggregating opinions from technical + intel + risk + skill agents
 - Producing the final Decision Dashboard JSON
 - Generating actionable buy/hold/sell recommendations with price levels
 """
@@ -16,6 +16,7 @@ from typing import List, Optional
 
 from src.agent.agents.base_agent import BaseAgent
 from src.agent.protocols import AgentContext, AgentOpinion, normalize_decision_signal
+from src.report_language import normalize_report_language
 
 logger = logging.getLogger(__name__)
 
@@ -32,13 +33,14 @@ class DecisionAgent(BaseAgent):
         return ctx.meta.get("response_mode") == "chat"
 
     def system_prompt(self, ctx: AgentContext) -> str:
+        report_language = normalize_report_language(ctx.meta.get("report_language", "zh"))
         if self._is_chat_mode(ctx):
-            return """\
+            prompt = """\
 You are a **Decision Synthesis Agent** replying directly to the user's latest
 stock-analysis question.
 
 You will receive structured opinions from the technical, intelligence, risk,
-and strategy stages. Synthesize them into a concise, natural-language answer.
+and skill stages. Synthesize them into a concise, natural-language answer.
 
 Requirements:
 - Answer the user's actual question directly
@@ -47,19 +49,24 @@ Requirements:
 - Highlight the main signal, key reasoning, and major risks
 - Do NOT output JSON or code fences unless the user explicitly asks for them
 """
+            if report_language == "en":
+                return prompt + "\nAlways answer in English.\n"
+            if report_language == "ko":
+                return prompt + "\n항상 한국어로 답변하세요.\n"
+            return prompt + "\n默认使用中文回答。\n"
 
         skills = ""
         if self.skill_instructions:
-            skills = f"\n## Active Trading Strategies\n\n{self.skill_instructions}\n"
+            skills = f"\n## Active Trading Skills\n\n{self.skill_instructions}\n"
 
-        return f"""\
+        prompt = f"""\
 You are a **Decision Synthesis Agent** that produces the final investment \
 Decision Dashboard.
 
 You will receive:
 1. Structured opinions from a Technical Agent and an Intel Agent
 2. Any risk flags raised by a Risk Agent
-3. Strategy evaluation results (if applicable)
+        3. Skill evaluation results (if applicable)
 
 Your task: synthesise all inputs into a single, actionable Decision Dashboard.
 {skills}
@@ -75,7 +82,7 @@ Your task: synthesise all inputs into a single, actionable Decision Dashboard.
 - Technical opinion weight: ~40%
 - Intel / sentiment weight: ~30%
 - Risk flags weight: ~30% (negative override: any high-severity risk caps signal at "hold")
-- If a strategy opinion is present, blend it at 20% weight (reducing others proportionally)
+- If a skill opinion is present, blend it at 20% weight (reducing others proportionally)
 
 ## Scoring
 - 80-100: buy (all conditions met, high conviction)
@@ -83,6 +90,13 @@ Your task: synthesise all inputs into a single, actionable Decision Dashboard.
 - 40-59: hold (mixed signals, or risk present)
 - 20-39: sell (negative trend + risk)
 - 0-19: sell (major risk + bearish)
+
+## Actionability Guardrails
+- Do not flip directly between buy and sell only because one trading day moved up or down.
+- Base operation_advice on support/resistance, volume/chip context, main-force capital flow, and risk flags.
+- If price is between support and resistance and capital flow is not clearly one-sided, prefer a neutral action such as hold/watch/range-bound/shakeout watch; keep decision_type as hold.
+- Buy requires support confirmation or a valid resistance breakout with volume/capital-flow confirmation.
+- Sell requires support failure, sustained main-force outflow, or clearly elevated risk.
 
 ## Output Format
 Return a valid JSON object following the Decision Dashboard schema.  The JSON \
@@ -95,6 +109,51 @@ Important: ``decision_type`` must stay within the existing enum
 ``buy|hold|sell``. Express stronger conviction via ``confidence_level``,
 ``sentiment_score``, and the natural-language fields instead of inventing
 new decision_type values.
+
+The nested ``dashboard`` object must include ``phase_decision`` with these
+keys: ``phase_context``, ``action_window``, ``immediate_action``,
+``watch_conditions``, ``next_check_time``, ``confidence_reason``,
+``data_limitations``. For intraday/lunch-break/near-close phases, describe the
+current action, watch conditions, and next check point. For pre-market,
+non-trading, or unknown phases, do not invent today's intraday movement. If
+quote, daily bars, or technical data is stale, fallback, missing, fetch_failed,
+partial, or estimated, ``confidence_level`` must not be High/高 and the
+limitation must be reflected in ``confidence_reason`` or ``data_limitations``.
+
+The nested ``dashboard`` object should include optional ``signal_attribution`` when
+the available evidence supports attribution, with these keys: ``technical_indicators``, ``news_sentiment``, ``fundamentals``,
+``market_conditions``, ``strongest_bullish_signal``, ``strongest_bearish_signal``.
+The first four keys are contribution weights (0-100). Non-zero valid weights
+should sum to 100; all-zero means no effective signal and must not be faked.
+``technical_indicators`` explains the impact of technical signals on the recommendation.
+``news_sentiment`` explains the impact of news/sentiment on the recommendation.
+``fundamentals`` explains the impact of fundamental factors (valuation, earnings, financials) on the recommendation.
+``market_conditions`` explains the impact of overall market environment on the recommendation.
+``strongest_bullish_signal`` is the name of the strongest bullish signal (e.g., MACD golden cross, earnings surprise, low valuation).
+``strongest_bearish_signal`` is the name of the strongest bearish signal (e.g., MA death cross, earnings warning, high valuation).
+"""
+        if report_language == "en":
+            return prompt + """
+
+## Output Language
+- Keep every JSON key unchanged.
+- `decision_type` must remain `buy|hold|sell`.
+- Write all human-readable JSON values in English.
+"""
+        if report_language == "ko":
+            return prompt + """
+
+## Output Language
+- Keep every JSON key unchanged.
+- `decision_type` must remain `buy|hold|sell`.
+- Write all human-readable JSON values in Korean (한국어).
+"""
+        return prompt + """
+
+## 输出语言
+- 所有 JSON 键名保持不变。
+- `decision_type` 必须保持为 `buy|hold|sell`。
+- 所有面向用户的人类可读文本值必须使用中文。
 """
 
     def build_user_message(self, ctx: AgentContext) -> str:
@@ -113,9 +172,12 @@ new decision_type values.
                 "",
             ]
 
-        # Feed prior opinions
+        # Feed prior opinions — Orchestrator已在 _partition_skill_opinions 中完成
+        # skill 观点的分拣，ctx.opinions 中不再含 invalid skill opinion；
+        # invalid skill 观点存于 ctx.meta["invalid_opinions"]。
+        # DecisionAgent 直接消费，不再二次过滤。
         if ctx.opinions:
-            parts.append("## Agent Opinions")
+            parts.append("## Agent Opinions (Evidence Chain)")
             for op in ctx.opinions:
                 parts.append(f"\n### {op.agent_name}")
                 parts.append(f"Signal: {op.signal} | Confidence: {op.confidence:.2f}")
@@ -124,10 +186,19 @@ new decision_type values.
                     parts.append(f"Key levels: {json.dumps(op.key_levels)}")
                 if op.raw_data:
                     extra_keys = {k: v for k, v in op.raw_data.items()
-                                  if k not in ("signal", "confidence", "reasoning", "key_levels")}
+                                  if k not in ("signal", "confidence", "reasoning", "key_levels", "invalid_signal")}
                     if extra_keys:
                         parts.append(f"Extra data: {json.dumps(extra_keys, ensure_ascii=False, default=str)}")
                 parts.append("")
+
+        invalid_opinions = ctx.meta.get("invalid_opinions") or []
+        if invalid_opinions:
+            parts.append("## Invalid Skill Opinions (Diagnostics only — not in evidence chain)")
+            parts.append(
+                f"共 {len(invalid_opinions)} 个 skill 观点因 signal 缺失或无法识别，已从证据链移除；"
+                f"仅供你在 data_limitations 中标注，不得作为决策依据。"
+            )
+            parts.append("")
 
         # Feed risk flags
         if ctx.risk_flags:
@@ -136,9 +207,16 @@ new decision_type values.
                 parts.append(f"- [{rf.get('severity', 'medium')}] {rf.get('category', '')}: {rf.get('description', '')}")
             parts.append("")
 
-        # Strategy meta
-        if ctx.meta.get("strategies_requested"):
-            parts.append(f"## Strategies: {', '.join(ctx.meta['strategies_requested'])}")
+        disagreement_summary = ctx.meta.get("agent_disagreement_summary")
+        if isinstance(disagreement_summary, dict) and disagreement_summary:
+            parts.append("## Agent Disagreement Summary")
+            parts.append(json.dumps(disagreement_summary, ensure_ascii=False, default=str))
+            parts.append("")
+
+        # Skill meta
+        requested_skills = ctx.meta.get("skills_requested") or ctx.meta.get("strategies_requested")
+        if requested_skills:
+            parts.append(f"## Skills: {', '.join(requested_skills)}")
             parts.append("")
 
         if self._is_chat_mode(ctx):

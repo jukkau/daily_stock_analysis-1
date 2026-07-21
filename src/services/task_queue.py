@@ -14,6 +14,7 @@ A股自选股智能分析系统 - 异步任务队列
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import threading
 import uuid
@@ -21,30 +22,49 @@ from concurrent.futures import ThreadPoolExecutor, Future
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Dict, List, Any, TYPE_CHECKING, Tuple, Literal
+from typing import Optional, Dict, List, Any, TYPE_CHECKING, Tuple, Literal, Callable
 
 if TYPE_CHECKING:
     from asyncio import Queue as AsyncQueue
 
-from data_provider.base import canonical_stock_code
+from data_provider.base import canonical_stock_code, normalize_stock_code
+from src.services.run_diagnostics import (
+    activate_run_diagnostic_context,
+    get_current_diagnostic_context,
+    reset_run_diagnostic_context,
+)
+from src.utils.analysis_metadata import SELECTION_SOURCES
+from src.services.stock_code_utils import resolve_index_stock_code_for_analysis
 
 logger = logging.getLogger(__name__)
 
 
+def _dedupe_stock_code_key(stock_code: str) -> str:
+    """
+    Build the internal duplicate-detection key for a stock code.
+
+    The task queue should treat equivalent market code shapes as the same
+    underlying stock, e.g. ``600519`` and ``600519.SH``.
+    """
+    return resolve_index_stock_code_for_analysis(normalize_stock_code(stock_code))
+
+
 class TaskStatus(str, Enum):
-    """任务状态枚举"""
-    PENDING = "pending"        # 等待执行
-    PROCESSING = "processing"  # 执行中
-    COMPLETED = "completed"    # 已完成
-    FAILED = "failed"          # 失败
+    """Task status enumeration"""
+    PENDING = "pending"        # Waiting for execution
+    PROCESSING = "processing"  # In progress
+    COMPLETED = "completed"    # Completed
+    FAILED = "failed"          # Failed
+    CANCEL_REQUESTED = "cancel_requested"  # Cancellation requested
+    CANCELLED = "cancelled"    # Cancelled by user/system
 
 
 @dataclass
 class TaskInfo:
     """
-    任务信息数据类
-    
-    包含任务的完整状态信息，用于 API 响应和内部管理
+    Task information dataclass.
+
+    Used for API responses and internal task management.
     """
     task_id: str
     stock_code: str
@@ -55,28 +75,42 @@ class TaskInfo:
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     report_type: str = "detailed"
+    analysis_phase: str = "auto"
     created_at: datetime = field(default_factory=datetime.now)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    original_query: Optional[str] = None
+    selection_source: Optional[str] = None
+    query_source: str = "api"
+    portfolio_context: Optional[Dict[str, Any]] = None
+    skills: Optional[List[str]] = None
+    report_language: Optional[str] = None
+    trace_id: Optional[str] = None
+    flow_events: List[Dict[str, Any]] = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典，用于 API 响应"""
+        """Convert task info into an API-friendly dictionary."""
         return {
             "task_id": self.task_id,
+            "trace_id": self.trace_id or self.task_id,
             "stock_code": self.stock_code,
             "stock_name": self.stock_name,
             "status": self.status.value,
             "progress": self.progress,
             "message": self.message,
             "report_type": self.report_type,
+            "analysis_phase": self.analysis_phase,
             "created_at": self.created_at.isoformat(),
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "error": self.error,
+            "original_query": self.original_query,
+            "selection_source": self.selection_source,
+            "skills": self.skills,
         }
     
     def copy(self) -> 'TaskInfo':
-        """创建任务信息的副本"""
+        """Create a shallow copy of the task information."""
         return TaskInfo(
             task_id=self.task_id,
             stock_code=self.stock_code,
@@ -87,9 +121,18 @@ class TaskInfo:
             result=self.result,
             error=self.error,
             report_type=self.report_type,
+            analysis_phase=self.analysis_phase,
             created_at=self.created_at,
             started_at=self.started_at,
             completed_at=self.completed_at,
+            original_query=self.original_query,
+            selection_source=self.selection_source,
+            query_source=self.query_source,
+            portfolio_context=dict(self.portfolio_context) if isinstance(self.portfolio_context, dict) else None,
+            skills=list(self.skills) if self.skills is not None else None,
+            report_language=self.report_language,
+            trace_id=self.trace_id or self.task_id,
+            flow_events=copy.deepcopy(self.flow_events),
         )
 
 
@@ -138,7 +181,7 @@ class AnalysisTaskQueue:
         
         # 核心数据结构
         self._tasks: Dict[str, TaskInfo] = {}           # task_id -> TaskInfo
-        self._analyzing_stocks: Dict[str, str] = {}     # stock_code -> task_id
+        self._analyzing_stocks: Dict[str, str] = {}     # dedupe_key -> task_id
         self._futures: Dict[str, Future] = {}           # task_id -> Future
         
         # SSE 订阅者列表（asyncio.Queue 实例）
@@ -153,6 +196,7 @@ class AnalysisTaskQueue:
         
         # 任务历史保留数量（内存中）
         self._max_history = 100
+        self._max_flow_events_per_task = 200
         
         self._initialized = True
         logger.info(f"[TaskQueue] 初始化完成，最大并发: {max_workers}")
@@ -241,8 +285,9 @@ class AnalysisTaskQueue:
         Returns:
             True 表示正在分析中
         """
+        dedupe_key = _dedupe_stock_code_key(stock_code)
         with self._data_lock:
-            return stock_code in self._analyzing_stocks
+            return dedupe_key in self._analyzing_stocks
     
     def get_analyzing_task_id(self, stock_code: str) -> Optional[str]:
         """
@@ -254,40 +299,74 @@ class AnalysisTaskQueue:
         Returns:
             任务 ID，如果没有则返回 None
         """
+        dedupe_key = _dedupe_stock_code_key(stock_code)
         with self._data_lock:
-            return self._analyzing_stocks.get(stock_code)
+            return self._analyzing_stocks.get(dedupe_key)
+
+    def validate_selection_source(self, selection_source: Optional[str]) -> None:
+        """
+        Validate the selection source parameter.
+
+        Args:
+            selection_source: Selection source label.
+
+        Raises:
+            ValueError: Raised when the selection source is invalid.
+        """
+        if selection_source is not None and selection_source not in SELECTION_SOURCES:
+            raise ValueError(
+                f"Invalid selection_source: {selection_source}. "
+                f"Must be one of {SELECTION_SOURCES}"
+            )
     
     def submit_task(
         self,
         stock_code: str,
         stock_name: Optional[str] = None,
+        original_query: Optional[str] = None,
+        selection_source: Optional[str] = None,
+        query_source: str = "api",
+        portfolio_context: Optional[Dict[str, Any]] = None,
         report_type: str = "detailed",
+        analysis_phase: str = "auto",
         force_refresh: bool = False,
+        skills: Optional[List[str]] = None,
+        report_language: Optional[str] = None,
     ) -> TaskInfo:
         """
-        提交分析任务
-        
+        Submit a single analysis task.
+
         Args:
-            stock_code: 股票代码
-            stock_name: 股票名称（可选）
-            report_type: 报告类型
-            force_refresh: 是否强制刷新
-            
+            stock_code: Stock code
+            stock_name: Optional stock name
+            original_query: Optional raw user input
+            selection_source: Optional source label
+            report_type: Report type
+            analysis_phase: Requested analysis phase override
+            force_refresh: Whether to bypass cache
+
         Returns:
-            TaskInfo: 任务信息
-            
+            TaskInfo: Accepted task information
+
         Raises:
-            DuplicateTaskError: 股票正在分析中
+            DuplicateTaskError: Raised when the stock is already being analyzed
         """
-        stock_code = canonical_stock_code(stock_code)
+        stock_code = resolve_index_stock_code_for_analysis(stock_code)
         if not stock_code:
             raise ValueError("股票代码不能为空或仅包含空白字符")
 
         accepted, duplicates = self.submit_tasks_batch(
             [stock_code],
             stock_name=stock_name,
+            original_query=original_query,
+            selection_source=selection_source,
+            query_source=query_source,
+            portfolio_context=portfolio_context,
             report_type=report_type,
+            analysis_phase=analysis_phase,
             force_refresh=force_refresh,
+            skills=skills,
+            report_language=report_language,
         )
         if duplicates:
             raise duplicates[0]
@@ -297,42 +376,62 @@ class AnalysisTaskQueue:
         self,
         stock_codes: List[str],
         stock_name: Optional[str] = None,
+        original_query: Optional[str] = None,
+        selection_source: Optional[str] = None,
+        query_source: str = "api",
+        portfolio_context: Optional[Dict[str, Any]] = None,
         report_type: str = "detailed",
+        analysis_phase: str = "auto",
         force_refresh: bool = False,
+        notify: bool = True,
+        skills: Optional[List[str]] = None,
+        report_language: Optional[str] = None,
     ) -> Tuple[List[TaskInfo], List[DuplicateTaskError]]:
         """
-        批量提交分析任务。
+        Submit analysis tasks in batch.
 
-        - 重复股票会被跳过并记录在 duplicates 中
-        - 如果线程池提交过程中发生异常，则回滚本次已创建任务，避免部分成功
+        - Duplicate stocks are skipped and recorded in duplicates.
+        - If executor submission fails, the current batch is rolled back.
         """
+        self.validate_selection_source(selection_source)
+
         accepted: List[TaskInfo] = []
         duplicates: List[DuplicateTaskError] = []
         created_task_ids: List[str] = []
 
-        normalized_codes = [
-            normalized for normalized in (canonical_stock_code(code) for code in stock_codes)
+        canonical_codes = [
+            normalized for normalized in (resolve_index_stock_code_for_analysis(code) for code in stock_codes)
             if normalized
         ]
 
         with self._data_lock:
-            for stock_code in normalized_codes:
-                if stock_code in self._analyzing_stocks:
-                    existing_task_id = self._analyzing_stocks[stock_code]
+            for stock_code in canonical_codes:
+                dedupe_key = _dedupe_stock_code_key(stock_code)
+                if dedupe_key in self._analyzing_stocks:
+                    existing_task_id = self._analyzing_stocks[dedupe_key]
                     duplicates.append(DuplicateTaskError(stock_code, existing_task_id))
                     continue
 
                 task_id = uuid.uuid4().hex
+                task_skills = list(skills) if skills is not None else None
                 task_info = TaskInfo(
                     task_id=task_id,
+                    trace_id=task_id,
                     stock_code=stock_code,
                     stock_name=stock_name,
                     status=TaskStatus.PENDING,
                     message="任务已加入队列",
                     report_type=report_type,
+                    analysis_phase=analysis_phase or "auto",
+                    original_query=original_query,
+                    selection_source=selection_source,
+                    query_source=query_source or "api",
+                    portfolio_context=dict(portfolio_context) if isinstance(portfolio_context, dict) else None,
+                    skills=task_skills,
+                    report_language=report_language,
                 )
                 self._tasks[task_id] = task_info
-                self._analyzing_stocks[stock_code] = task_id
+                self._analyzing_stocks[dedupe_key] = task_id
 
                 try:
                     future = self.executor.submit(
@@ -341,9 +440,12 @@ class AnalysisTaskQueue:
                         stock_code,
                         report_type,
                         force_refresh,
+                        notify,
+                        task_skills,
+                        report_language,
                     )
                 except Exception:
-                    # 回滚当前批次，避免 API 拿不到 task_id 却留下半提交任务。
+                    # Roll back the current batch to avoid partial submission.
                     self._rollback_submitted_tasks_locked(created_task_ids + [task_id])
                     raise
 
@@ -360,6 +462,49 @@ class AnalysisTaskQueue:
 
         return accepted, duplicates
 
+    def submit_background_task(
+        self,
+        run_task: Callable[[], Optional[Any]],
+        *,
+        stock_code: str,
+        stock_name: Optional[str] = None,
+        report_type: str = "detailed",
+        message: Optional[str] = "任务已加入队列",
+        task_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> TaskInfo:
+        """
+        Submit a generic background callable with task lifecycle tracking.
+
+        This is used by callers that need task status visibility but do not
+        map to standard per-stock async analysis flow.
+        """
+        task_id = task_id or uuid.uuid4().hex
+        task_info = TaskInfo(
+            task_id=task_id,
+            trace_id=trace_id or task_id,
+            stock_code=stock_code,
+            stock_name=stock_name,
+            status=TaskStatus.PENDING,
+            message=message,
+            report_type=report_type,
+        )
+
+        with self._data_lock:
+            if task_id in self._tasks:
+                raise ValueError(f"任务 ID 已存在: {task_id}")
+            self._tasks[task_id] = task_info
+            try:
+                future = self.executor.submit(self._execute_background_task, task_id, run_task)
+            except Exception:
+                del self._tasks[task_id]
+                raise
+
+            self._futures[task_id] = future
+            self._broadcast_event("task_created", task_info.to_dict())
+
+        return task_info.copy()
+
     def _rollback_submitted_tasks_locked(self, task_ids: List[str]) -> None:
         """回滚当前批次已创建但尚未稳定返回给调用方的任务。"""
         for task_id in task_ids:
@@ -368,8 +513,10 @@ class AnalysisTaskQueue:
                 future.cancel()
 
             task = self._tasks.pop(task_id, None)
-            if task and self._analyzing_stocks.get(task.stock_code) == task_id:
-                del self._analyzing_stocks[task.stock_code]
+            if task:
+                dedupe_key = _dedupe_stock_code_key(task.stock_code)
+                if self._analyzing_stocks.get(dedupe_key) == task_id:
+                    del self._analyzing_stocks[dedupe_key]
     
     def get_task(self, task_id: str) -> Optional[TaskInfo]:
         """
@@ -384,6 +531,44 @@ class AnalysisTaskQueue:
         with self._data_lock:
             task = self._tasks.get(task_id)
             return task.copy() if task else None
+
+    def append_task_flow_event(
+        self,
+        task_id: str,
+        flow_event: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Append a recent run-flow event to an active task and broadcast it.
+
+        The event cache is deliberately bounded and fail-open; diagnostics must
+        never affect the analysis pipeline.
+        """
+        try:
+            event_payload = copy.deepcopy(flow_event)
+        except Exception:
+            logger.debug("[TaskQueue] 忽略不可复制的运行流事件: task_id=%s", task_id)
+            return None
+
+        with self._data_lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return None
+            task.flow_events.append(event_payload)
+            if len(task.flow_events) > self._max_flow_events_per_task:
+                task.flow_events = task.flow_events[-self._max_flow_events_per_task:]
+            task_snapshot = task.copy()
+
+        payload = task_snapshot.to_dict()
+        payload["flow_event"] = event_payload
+        self._broadcast_event("task_progress", payload)
+        return event_payload
+
+    def get_task_flow_events(self, task_id: str) -> List[Dict[str, Any]]:
+        """Return a copy of the recent run-flow events for a task."""
+        with self._data_lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return []
+            return copy.deepcopy(task.flow_events)
     
     def list_pending_tasks(self) -> List[TaskInfo]:
         """
@@ -395,7 +580,7 @@ class AnalysisTaskQueue:
         with self._data_lock:
             return [
                 task.copy() for task in self._tasks.values()
-                if task.status in (TaskStatus.PENDING, TaskStatus.PROCESSING)
+                if task.status in (TaskStatus.PENDING, TaskStatus.PROCESSING, TaskStatus.CANCEL_REQUESTED)
             ]
     
     def list_all_tasks(self, limit: int = 50) -> List[TaskInfo]:
@@ -434,6 +619,42 @@ class AnalysisTaskQueue:
             for task in self._tasks.values():
                 stats[task.status.value] = stats.get(task.status.value, 0) + 1
             return stats
+
+    def update_task_progress(
+        self,
+        task_id: str,
+        progress: int,
+        message: Optional[str] = None,
+        *,
+        event_type: str = "task_progress",
+    ) -> Optional[TaskInfo]:
+        """
+        Update in-flight task progress and broadcast an SSE event.
+
+        Only pending/processing tasks are updated. Progress is clamped to
+        [0, 99] so terminal states remain controlled by completion/failure.
+        """
+        with self._data_lock:
+            task = self._tasks.get(task_id)
+            if not task or task.status not in (TaskStatus.PENDING, TaskStatus.PROCESSING):
+                return None
+
+            next_progress = max(task.progress, max(0, min(99, int(progress))))
+            changed = False
+            if next_progress != task.progress:
+                task.progress = next_progress
+                changed = True
+            if message is not None and message != task.message:
+                task.message = message
+                changed = True
+
+            if not changed:
+                return task.copy()
+
+            task_snapshot = task.copy()
+
+        self._broadcast_event(event_type, task_snapshot.to_dict())
+        return task_snapshot
     
     # ========== 任务执行 ==========
     
@@ -443,6 +664,9 @@ class AnalysisTaskQueue:
         stock_code: str,
         report_type: str,
         force_refresh: bool,
+        notify: bool = True,
+        skills: Optional[List[str]] = None,
+        report_language: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         执行分析任务（在线程池中运行）
@@ -461,6 +685,10 @@ class AnalysisTaskQueue:
             task = self._tasks.get(task_id)
             if not task:
                 return None
+            trace_id = task.trace_id or task_id
+            analysis_phase = task.analysis_phase
+            query_source = task.query_source or "api"
+            portfolio_context = dict(task.portfolio_context) if isinstance(task.portfolio_context, dict) else None
             task.status = TaskStatus.PROCESSING
             task.started_at = datetime.now()
             task.message = "正在分析中..."
@@ -474,12 +702,36 @@ class AnalysisTaskQueue:
             
             # 执行分析
             service = AnalysisService()
+
+            def _on_progress(progress: int, message: str) -> None:
+                self.update_task_progress(task_id, progress, message)
+
+            diag_token = None
+            if get_current_diagnostic_context() is None:
+                diag_token = activate_run_diagnostic_context(
+                    trace_id=trace_id,
+                    task_id=task_id,
+                    query_id=task_id,
+                    stock_code=stock_code,
+                    trigger_source=query_source,
+                    event_sink=lambda event: self.append_task_flow_event(task_id, event),
+                )
             result = service.analyze_stock(
                 stock_code=stock_code,
                 report_type=report_type,
                 force_refresh=force_refresh,
                 query_id=task_id,
+                trace_id=trace_id,
+                send_notification=notify,
+                progress_callback=_on_progress,
+                skills=skills,
+                analysis_phase=analysis_phase,
+                query_source=query_source,
+                portfolio_context=portfolio_context,
+                report_language=report_language,
             )
+            reset_run_diagnostic_context(diag_token)
+            diag_token = None
             
             if result:
                 # 更新任务状态为完成
@@ -494,8 +746,9 @@ class AnalysisTaskQueue:
                         task.stock_name = result.get("stock_name", task.stock_name)
                         
                         # 从分析中集合移除
-                        if task.stock_code in self._analyzing_stocks:
-                            del self._analyzing_stocks[task.stock_code]
+                        dedupe_key = _dedupe_stock_code_key(task.stock_code)
+                        if dedupe_key in self._analyzing_stocks:
+                            del self._analyzing_stocks[dedupe_key]
                 
                 self._broadcast_event("task_completed", task.to_dict())
                 logger.info(f"[TaskQueue] 任务完成: {task_id} ({stock_code})")
@@ -506,9 +759,11 @@ class AnalysisTaskQueue:
                 return result
             else:
                 # 分析返回空结果
-                raise Exception("分析返回空结果")
+                raise Exception(service.last_error or "分析返回空结果")
                 
         except Exception as e:
+            if "diag_token" in locals():
+                reset_run_diagnostic_context(diag_token)
             error_msg = str(e)
             logger.error(f"[TaskQueue] 任务失败: {task_id} ({stock_code}), 错误: {error_msg}")
             
@@ -521,14 +776,95 @@ class AnalysisTaskQueue:
                     task.message = f"分析失败: {error_msg[:50]}"
                     
                     # 从分析中集合移除
-                    if task.stock_code in self._analyzing_stocks:
-                        del self._analyzing_stocks[task.stock_code]
+                    dedupe_key = _dedupe_stock_code_key(task.stock_code)
+                    if dedupe_key in self._analyzing_stocks:
+                        del self._analyzing_stocks[dedupe_key]
             
             self._broadcast_event("task_failed", task.to_dict())
             
             # 清理过期任务
             self._cleanup_old_tasks()
             
+            return None
+
+    def _execute_background_task(
+        self,
+        task_id: str,
+        run_task: Callable[[], Optional[Dict[str, Any]]],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        执行通用后台任务（支持自定义运行逻辑）
+
+        Args:
+            task_id: 任务 ID
+            run_task: 任务执行函数
+
+        Returns:
+            任务执行结果字典（可选）
+        """
+        with self._data_lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return None
+
+            trace_id = task.trace_id or task_id
+            task.status = TaskStatus.PROCESSING
+            task.started_at = datetime.now()
+            task.message = "任务执行中"
+            task.progress = 10
+            self._broadcast_event("task_started", task.to_dict())
+
+        try:
+            diag_token = None
+            if get_current_diagnostic_context() is None:
+                diag_token = activate_run_diagnostic_context(
+                    trace_id=trace_id,
+                    task_id=task_id,
+                    query_id=task_id,
+                    stock_code=task.stock_code,
+                    trigger_source="api",
+                    event_sink=lambda event: self.append_task_flow_event(task_id, event),
+                )
+            try:
+                result = run_task()
+            finally:
+                reset_run_diagnostic_context(diag_token)
+            if result is None:
+                raise RuntimeError("任务返回空结果，未生成可持久化内容")
+
+            with self._data_lock:
+                task = self._tasks.get(task_id)
+                if task:
+                    task.status = TaskStatus.COMPLETED
+                    task.progress = 100
+                    task.completed_at = datetime.now()
+                    task.result = result
+                    task.message = "任务执行完成"
+
+            self._broadcast_event("task_completed", task.to_dict())
+            logger.info(f"[TaskQueue] 自定义任务完成: {task_id}")
+
+            self._cleanup_old_tasks()
+            return result
+
+        except Exception as e:  # pragma: no cover - behavior verified in downstream tests
+            error_msg = str(e)
+            logger.error(
+                f"[TaskQueue] 自定义任务失败: {task_id}, 错误: {error_msg}"
+            )
+
+            with self._data_lock:
+                task = self._tasks.get(task_id)
+                if task:
+                    task.status = TaskStatus.FAILED
+                    task.completed_at = datetime.now()
+                    task.error = error_msg[:200]
+                    task.message = f"任务失败: {error_msg[:80]}"
+
+            if task:
+                self._broadcast_event("task_failed", task.to_dict())
+
+            self._cleanup_old_tasks()
             return None
     
     def _cleanup_old_tasks(self) -> int:
@@ -547,7 +883,7 @@ class AnalysisTaskQueue:
             # 按时间排序，删除旧的已完成任务
             completed_tasks = sorted(
                 [t for t in self._tasks.values()
-                 if t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED)],
+                 if t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED)],
                 key=lambda t: t.created_at
             )
             

@@ -8,17 +8,77 @@ Tools:
 """
 
 import logging
-from typing import Optional
 
-from src.agent.tools.registry import ToolParameter, ToolDefinition
+from src.agent.tools.registry import ToolParameter, ToolDefinition, ToolPolicy
 
 logger = logging.getLogger(__name__)
+
+_NEWS_READ_POLICY = ToolPolicy.declared(
+    read_only=True,
+    side_effects=["network_read", "db_write_cache"],
+    permissions=["news:read"],
+    scope_dimensions=["stock"],
+)
+_INTEL_READ_POLICY = ToolPolicy.declared(
+    read_only=True,
+    side_effects=["network_read", "db_write_cache"],
+    permissions=["intel:read"],
+    scope_dimensions=["stock"],
+)
+
+
+def _get_db():
+    """Lazy import for DatabaseManager."""
+    from src.storage import get_db
+    return get_db()
 
 
 def _get_search_service():
     """Return shared SearchService singleton."""
     from src.search_service import get_search_service
     return get_search_service()
+
+
+def _canonical_search_code(stock_code: str) -> str:
+    from data_provider.base import canonical_stock_code, normalize_stock_code
+
+    return canonical_stock_code(normalize_stock_code(str(stock_code or "").strip()))
+
+
+def _persist_news_response(
+    *,
+    stock_code: str,
+    stock_name: str,
+    dimension: str,
+    response,
+) -> None:
+    """Best-effort news persistence for Agent search tools."""
+    if not response or not getattr(response, "success", False) or not getattr(response, "results", None):
+        return
+
+    code = _canonical_search_code(stock_code)
+    try:
+        saved_count = _get_db().save_news_intel(
+            code=code,
+            name=stock_name,
+            dimension=dimension,
+            query=response.query,
+            response=response,
+            query_context=None,
+        )
+        logger.info(
+            "Agent news intel persisted for %s (dimension=%s, new_records=%s)",
+            code,
+            dimension,
+            saved_count,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Agent news intel persistence failed for %s (dimension=%s): %s",
+            code,
+            dimension,
+            exc,
+        )
 
 
 def _handle_search_stock_news(stock_code: str, stock_name: str) -> dict:
@@ -36,6 +96,13 @@ def _handle_search_stock_news(stock_code: str, stock_name: str) -> dict:
             "success": False,
             "error": response.error_message,
         }
+
+    _persist_news_response(
+        stock_code=stock_code,
+        stock_name=stock_name,
+        dimension="latest_news",
+        response=response,
+    )
 
     return {
         "query": response.query,
@@ -74,6 +141,7 @@ search_stock_news_tool = ToolDefinition(
     ],
     handler=_handle_search_stock_news,
     category="search",
+    policy=_NEWS_READ_POLICY,
 )
 
 
@@ -91,7 +159,7 @@ def _handle_search_comprehensive_intel(stock_code: str, stock_name: str) -> dict
     intel_results = service.search_comprehensive_intel(
         stock_code=stock_code,
         stock_name=stock_name,
-        max_searches=5,
+        max_searches=6,
     )
 
     if not intel_results:
@@ -104,6 +172,12 @@ def _handle_search_comprehensive_intel(stock_code: str, stock_name: str) -> dict
     dimensions = {}
     for dim_name, response in intel_results.items():
         if response and response.success:
+            _persist_news_response(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                dimension=dim_name,
+                response=response,
+            )
             dimensions[dim_name] = {
                 "query": response.query,
                 "results_count": len(response.results),
@@ -142,6 +216,7 @@ search_comprehensive_intel_tool = ToolDefinition(
     ],
     handler=_handle_search_comprehensive_intel,
     category="search",
+    policy=_INTEL_READ_POLICY,
 )
 
 

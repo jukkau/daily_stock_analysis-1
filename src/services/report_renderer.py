@@ -15,39 +15,39 @@ from typing import Any, Dict, List, Optional
 
 from src.analyzer import AnalysisResult
 from src.config import get_config
+from src.market_phase_summary import format_public_market_status_line, format_public_phase_pack_excerpt
+from src.report_language import (
+    get_localized_stock_name,
+    get_report_labels,
+    get_signal_level,
+    get_chip_unavailable_reason,
+    is_chip_structure_unavailable,
+    localize_chip_health,
+    localize_conflict_severity,
+    localize_consensus_level,
+    localize_operation_advice,
+    localize_strategy_signal,
+    localize_strategy_skill,
+    localize_strategy_conflict_description,
+    localize_strategy_synthesis_summary,
+    localize_trend_prediction,
+    normalize_report_language,
+    normalize_strategy_synthesis_payload,
+    strategy_invalid_opinion_count,
+)
+from src.schemas.decision_action import (
+    display_action_fields_for_result,
+    display_decision_type_for_result,
+    display_operation_advice_for_result,
+    localize_action_label,
+)
+from src.utils.data_processing import (
+    normalize_model_used,
+    signal_attribution_has_content,
+    signal_attribution_weight_items,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _get_signal_level(result: AnalysisResult) -> tuple:
-    """Return (signal_text, emoji, color_tag) for a result."""
-    advice = result.operation_advice
-    score = result.sentiment_score
-    advice_map = {
-        "强烈买入": ("强烈买入", "💚", "强买"),
-        "买入": ("买入", "🟢", "买入"),
-        "加仓": ("买入", "🟢", "买入"),
-        "持有": ("持有", "🟡", "持有"),
-        "观望": ("观望", "⚪", "观望"),
-        "减仓": ("减仓", "🟠", "减仓"),
-        "卖出": ("卖出", "🔴", "卖出"),
-        "强烈卖出": ("卖出", "🔴", "卖出"),
-    }
-    if advice in advice_map:
-        return advice_map[advice]
-    if score >= 80:
-        return ("强烈买入", "💚", "强买")
-    elif score >= 65:
-        return ("买入", "🟢", "买入")
-    elif score >= 55:
-        return ("持有", "🟡", "持有")
-    elif score >= 45:
-        return ("观望", "⚪", "观望")
-    elif score >= 35:
-        return ("减仓", "🟠", "减仓")
-    elif score < 35:
-        return ("卖出", "🔴", "卖出")
-    return ("观望", "⚪", "观望")
 
 
 def _escape_md(text: str) -> str:
@@ -69,6 +69,7 @@ def _clean_sniper_value(val: Any) -> str:
     prefixes = [
         "理想买入点：", "次优买入点：", "止损位：", "目标位：",
         "理想买入点:", "次优买入点:", "止损位:", "目标位:",
+        "Ideal Entry:", "Secondary Entry:", "Stop Loss:", "Target:",
     ]
     for prefix in prefixes:
         if s.startswith(prefix):
@@ -124,27 +125,88 @@ def render(
         logger.debug("Report template not found: %s", template_path)
         return None
 
+    report_language = normalize_report_language(
+        (extra_context or {}).get("report_language")
+        or next(
+            (getattr(result, "report_language", None) for result in results if getattr(result, "report_language", None)),
+            None,
+        )
+        or getattr(get_config(), "report_language", "zh")
+    )
+    labels = get_report_labels(report_language)
+
     # Build template context with pre-computed signal levels (sorted by score)
     sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
     sorted_enriched = []
     for r in sorted_results:
-        st, se, _ = _get_signal_level(r)
-        rn = r.name if r.name and not r.name.startswith("股票") else f"股票{r.code}"
+        display_action = display_action_fields_for_result(
+            r,
+            report_language=report_language,
+        )["action"]
+        display_advice = display_operation_advice_for_result(
+            r,
+            report_language=report_language,
+        )
+        signal_action = {
+            "buy": "buy",
+            "add": "buy",
+            "hold": "hold",
+            "reduce": "reduce",
+            "sell": "sell",
+            "watch": "watch",
+            "avoid": "hold",
+            "alert": "sell",
+        }.get(display_action, display_action)
+        _, se, _ = get_signal_level(signal_action or display_advice, r.sentiment_score, report_language)
+        rn = get_localized_stock_name(r.name, r.code, report_language)
         sorted_enriched.append({
             "result": r,
-            "signal_text": st,
+            "signal_text": display_advice,
             "signal_emoji": se,
             "stock_name": _escape_md(rn),
+            "localized_operation_advice": display_advice,
+            "localized_trend_prediction": localize_trend_prediction(r.trend_prediction, report_language),
         })
 
-    buy_count = sum(1 for r in results if getattr(r, "decision_type", "") == "buy")
-    sell_count = sum(1 for r in results if getattr(r, "decision_type", "") == "sell")
-    hold_count = sum(1 for r in results if getattr(r, "decision_type", "") in ("hold", ""))
+    display_buckets = [
+        display_decision_type_for_result(r, report_language=report_language)
+        for r in results
+    ]
+    buy_count = sum(1 for bucket in display_buckets if bucket == "buy")
+    sell_count = sum(1 for bucket in display_buckets if bucket == "sell")
+    hold_count = len(display_buckets) - buy_count - sell_count
+    show_llm_model = bool(getattr(get_config(), "report_show_llm_model", True))
+    models_used: List[str] = []
+    if show_llm_model:
+        for result in results:
+            model = normalize_model_used(getattr(result, "model_used", None))
+            if model:
+                models_used.append(model)
+        models_used = list(dict.fromkeys(models_used))
 
     report_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def failed_checks(checklist: List[str]) -> List[str]:
         return [c for c in (checklist or []) if c.startswith("❌") or c.startswith("⚠️")]
+
+    def phase_pack_excerpt(result: AnalysisResult) -> str:
+        return format_public_phase_pack_excerpt(
+            getattr(result, "market_phase_summary", None),
+            getattr(result, "analysis_context_pack_overview", None),
+            source=getattr(result, "analysis_visibility_source", None) or "evaluator_snapshot",
+            report_language=report_language,
+        )
+
+    def market_status_line() -> str:
+        for source_results in (results or [], sorted_results):
+            for result in source_results:
+                line = format_public_market_status_line(
+                    getattr(result, "market_phase_summary", None),
+                    report_language=report_language,
+                )
+                if line:
+                    return line
+        return ""
 
     context: Dict[str, Any] = {
         "report_date": report_date,
@@ -155,13 +217,38 @@ def render(
         "buy_count": buy_count,
         "sell_count": sell_count,
         "hold_count": hold_count,
+        "labels": labels,
+        "report_language": report_language,
+        "models_used": models_used,
+        "show_llm_model": show_llm_model,
+        "market_status_line": market_status_line(),
         "escape_md": _escape_md,
         "clean_sniper": _clean_sniper_value,
         "failed_checks": failed_checks,
+        "phase_pack_excerpt": phase_pack_excerpt,
         "history_by_code": {},
+        "get_chip_unavailable_reason": get_chip_unavailable_reason,
+        "is_chip_structure_unavailable": is_chip_structure_unavailable,
+        "localize_operation_advice": localize_operation_advice,
+        "localize_action_label": localize_action_label,
+        "localize_trend_prediction": localize_trend_prediction,
+        "localize_chip_health": localize_chip_health,
+        "localize_strategy_signal": localize_strategy_signal,
+        "localize_strategy_skill": localize_strategy_skill,
+        "localize_strategy_conflict_description": localize_strategy_conflict_description,
+        "localize_strategy_synthesis_summary": localize_strategy_synthesis_summary,
+        "localize_consensus_level": localize_consensus_level,
+        "localize_conflict_severity": localize_conflict_severity,
+        "normalize_strategy_synthesis_payload": normalize_strategy_synthesis_payload,
+        "strategy_invalid_opinion_count": strategy_invalid_opinion_count,
+        "signal_attribution_has_content": signal_attribution_has_content,
+        "signal_attribution_weight_items": signal_attribution_weight_items,
     }
     if extra_context:
-        context.update(extra_context)
+        safe_extra_context = dict(extra_context)
+        safe_extra_context.pop("labels", None)
+        safe_extra_context.pop("report_language", None)
+        context.update(safe_extra_context)
 
     try:
         env = Environment(

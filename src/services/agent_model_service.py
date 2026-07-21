@@ -5,6 +5,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from src.config import get_effective_agent_models_to_try, get_effective_agent_primary_model
+from src.agent.litellm_route_resolution import resolve_agent_litellm_route
+from src.llm.backend_registry import GENERATION_ONLY_BACKEND_IDS
+
 
 _PLACEHOLDER_TO_PROVIDER = {
     "__legacy_gemini__": "gemini",
@@ -32,11 +36,13 @@ def _get_model_provider(model_name: str) -> str:
 
 def _build_non_legacy_deployments(config) -> List[Dict[str, Any]]:
     source = _get_models_source(config)
-    fallback_models = set(getattr(config, "litellm_fallback_models", []) or [])
-    primary_model = getattr(config, "litellm_model", "")
+    resolution = resolve_agent_litellm_route(config)
+    primary_model = resolution.primary_model or get_effective_agent_primary_model(config)
+    fallback_models = set((resolution.models_to_try or [])[1:])
+    model_list = resolution.model_list
     deployments: List[Dict[str, Any]] = []
 
-    for index, entry in enumerate(getattr(config, "llm_model_list", []) or []):
+    for index, entry in enumerate(model_list):
         params = entry.get("litellm_params", {}) or {}
         model_name = str(params.get("model") or "").strip()
         if not model_name or model_name.startswith("__legacy_"):
@@ -61,9 +67,8 @@ def _build_non_legacy_deployments(config) -> List[Dict[str, Any]]:
 
 
 def _build_legacy_deployments(config) -> List[Dict[str, Any]]:
-    primary_model = getattr(config, "litellm_model", "")
-    fallback_models = getattr(config, "litellm_fallback_models", []) or []
-    ordered_models = [model for model in [primary_model] + fallback_models if model]
+    primary_model = get_effective_agent_primary_model(config)
+    ordered_models = get_effective_agent_models_to_try(config)
     if not ordered_models:
         return []
 
@@ -75,7 +80,7 @@ def _build_legacy_deployments(config) -> List[Dict[str, Any]]:
 
     deployments: List[Dict[str, Any]] = []
     seen_models = set()
-    fallback_set = set(fallback_models)
+    fallback_set = set(ordered_models[1:])
     for model_name in ordered_models:
         if model_name in seen_models:
             continue
@@ -119,6 +124,9 @@ def _build_legacy_deployments(config) -> List[Dict[str, Any]]:
 
 def list_agent_model_deployments(config) -> List[Dict[str, Any]]:
     """Return configured Agent model deployments without exposing secrets."""
+    if (getattr(config, "agent_generation_backend", "") or "").strip().lower() in GENERATION_ONLY_BACKEND_IDS:
+        return []
+
     deployments = _build_non_legacy_deployments(config)
     if not deployments:
         deployments = _build_legacy_deployments(config)

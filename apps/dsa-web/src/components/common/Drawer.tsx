@@ -1,5 +1,6 @@
 import type React from 'react';
 import { useEffect, useCallback } from 'react';
+import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import { cn } from '../../utils/cn';
 
 let activeDrawerCount = 0;
@@ -12,6 +13,7 @@ interface DrawerProps {
   width?: string;
   zIndex?: number;
   side?: 'left' | 'right';
+  backdropClassName?: string;
 }
 
 /**
@@ -25,7 +27,9 @@ export const Drawer: React.FC<DrawerProps> = ({
   width = 'max-w-2xl',
   zIndex = 50,
   side = 'right',
+  backdropClassName,
 }) => {
+  const { t } = useUiLanguage();
   // Close the drawer when Escape is pressed.
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -64,7 +68,10 @@ export const Drawer: React.FC<DrawerProps> = ({
     <div className="fixed inset-0 overflow-hidden" style={{ zIndex }} role="presentation">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-background/80 backdrop-blur-sm transition-opacity duration-300"
+        className={cn(
+          'absolute inset-0 bg-background/80 backdrop-blur-sm transition-opacity duration-300',
+          backdropClassName,
+        )}
         onClick={onClose}
       />
 
@@ -76,7 +83,7 @@ export const Drawer: React.FC<DrawerProps> = ({
           className={cn(
             'relative flex w-full flex-col bg-card',
             borderClass,
-            side === 'right' ? 'border-white/50' : 'border-border/70 shadow-2xl',
+            side === 'right' ? 'border-border/80' : 'border-border/70 shadow-2xl',
             side === 'left' ? 'animate-slide-in-left' : 'animate-slide-in-right'
           )}
         >
@@ -91,7 +98,7 @@ export const Drawer: React.FC<DrawerProps> = ({
               type="button"
               onClick={onClose}
               className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-border/70 bg-card/80 text-secondary-text transition-colors hover:bg-hover hover:text-foreground"
-              aria-label="关闭抽屉"
+              aria-label={t('common.closeDrawer')}
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
